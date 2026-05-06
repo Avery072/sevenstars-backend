@@ -1,0 +1,1339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Seven Star Food — Admin Portal</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --red: #C00000;
+    --red-dark: #8B0000;
+    --red-light: #F2DCDB;
+    --white: #FFFFFF;
+    --gray-light: #F2F2F2;
+    --gray-mid: #D9D9D9;
+    --gray-dark: #595959;
+    --black: #1A1A1A;
+    --border: #BFBFBF;
+    --font: Arial, sans-serif;
+  }
+
+  body {
+    font-family: var(--font);
+    background: var(--gray-light);
+    color: var(--black);
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+    font-size: 13px;
+  }
+
+  .sidebar {
+    width: 200px;
+    background: var(--black);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    height: 100vh;
+    overflow-y: auto;
+  }
+
+  .sidebar-logo {
+    background: var(--red);
+    padding: 14px 14px 12px;
+    border-bottom: 3px solid var(--red-dark);
+  }
+
+  .logo-text { color: white; font-size: 13px; font-weight: bold; line-height: 1.3; }
+  .logo-sub { color: rgba(255,255,255,0.65); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
+
+  .sidebar-section {
+    padding: 12px 12px 4px;
+    font-size: 9px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    border-top: 1px solid #333;
+    margin-top: 6px;
+  }
+
+  .sidebar-section:first-of-type { margin-top: 0; border-top: none; }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    color: #CCCCCC;
+    font-size: 12px;
+    transition: background 0.1s;
+    user-select: none;
+    border-left: 3px solid transparent;
+  }
+
+  .nav-item:hover { background: #2A2A2A; color: white; }
+  .nav-item.active { background: #2A2A2A; color: white; border-left: 3px solid var(--red); }
+
+  .nav-badge {
+    margin-left: auto;
+    background: var(--red);
+    color: white;
+    font-size: 10px;
+    padding: 1px 5px;
+    font-weight: bold;
+  }
+
+  .sidebar-footer {
+    margin-top: auto;
+    padding: 10px 12px;
+    border-top: 1px solid #333;
+    background: #111;
+    font-size: 11px;
+    color: #888;
+  }
+
+  .user-name { color: #CCC; font-weight: bold; font-size: 12px; }
+
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+  .topbar {
+    background: var(--white);
+    border-bottom: 2px solid var(--gray-mid);
+    padding: 0 20px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+
+  .page-title { font-size: 14px; font-weight: bold; color: var(--black); text-transform: uppercase; letter-spacing: 0.03em; }
+  .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-family: var(--font);
+    font-weight: bold;
+    cursor: pointer;
+    border: 1px solid;
+  }
+
+  .btn-primary { background: var(--red); color: white; border-color: var(--red-dark); }
+  .btn-primary:hover { background: var(--red-dark); }
+  .btn-outline { background: white; color: var(--black); border-color: var(--border); }
+  .btn-outline:hover { background: var(--gray-light); }
+  .btn-danger { background: #8B0000; color: white; border-color: #5a0000; }
+  .btn-danger:hover { background: #5a0000; }
+
+  .content { flex: 1; overflow-y: auto; padding: 16px 20px; }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+    margin-bottom: 16px;
+    border: 1px solid var(--border);
+    border-right: none;
+  }
+
+  .stat-card { background: white; padding: 12px 14px; border-right: 1px solid var(--border); }
+  .stat-card.accent { background: var(--red); }
+  .stat-card.accent .stat-label { color: rgba(255,255,255,0.8); }
+  .stat-card.accent .stat-value { color: white; }
+  .stat-card.accent .stat-change { color: rgba(255,255,255,0.7); }
+
+  .stat-label { font-size: 10px; color: var(--gray-dark); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
+  .stat-value { font-size: 22px; font-weight: bold; color: var(--black); line-height: 1; margin-bottom: 3px; }
+  .stat-change { font-size: 10px; color: var(--gray-dark); }
+
+  .table-card { background: white; border: 1px solid var(--border); margin-bottom: 16px; }
+
+  .table-header {
+    padding: 7px 12px;
+    border-bottom: 2px solid var(--black);
+    background: var(--gray-light);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .table-title { font-size: 12px; font-weight: bold; color: var(--black); text-transform: uppercase; letter-spacing: 0.04em; }
+  .table-count { font-size: 11px; color: var(--gray-dark); background: var(--gray-mid); padding: 1px 6px; }
+
+  .search-input {
+    margin-left: auto;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    font-size: 12px;
+    font-family: var(--font);
+    color: var(--black);
+    background: white;
+    outline: none;
+    width: 160px;
+  }
+
+  .search-input:focus { border-color: var(--red); }
+
+  table { width: 100%; border-collapse: collapse; }
+
+  thead tr { background: var(--gray-light); border-bottom: 2px solid var(--gray-mid); }
+
+  th {
+    padding: 6px 10px;
+    text-align: left;
+    font-size: 11px;
+    color: var(--black);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: bold;
+    border-right: 1px solid var(--gray-mid);
+  }
+
+  th:last-child { border-right: none; }
+
+  td {
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--black);
+    border-bottom: 1px solid var(--gray-mid);
+    border-right: 1px solid var(--gray-mid);
+  }
+
+  td:last-child { border-right: none; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #FFF5F5; }
+
+  .badge {
+    display: inline-block;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .badge-green { background: #E2EFDA; color: #375623; }
+  .badge-amber { background: #FFF2CC; color: #7D6608; }
+  .badge-red { background: var(--red-light); color: var(--red-dark); }
+  .badge-gray { background: var(--gray-mid); color: var(--gray-dark); }
+
+  .order-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+    margin-bottom: 16px;
+    border: 1px solid var(--border);
+    border-right: none;
+    border-bottom: none;
+  }
+
+  .order-card {
+    background: white;
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: 12px;
+    cursor: pointer;
+  }
+
+  .order-card:hover { background: #FFF5F5; }
+
+  .order-card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; }
+  .order-customer { font-size: 12px; font-weight: bold; color: var(--black); }
+  .order-time { font-size: 10px; color: var(--gray-dark); margin-top: 1px; }
+  .order-items { font-size: 11px; color: var(--gray-dark); margin-bottom: 8px; line-height: 1.5; }
+  .order-footer { display: flex; align-items: center; justify-content: space-between; padding-top: 8px; border-top: 1px solid var(--gray-mid); }
+  .order-total { font-size: 13px; font-weight: bold; color: var(--black); }
+
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.4);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .modal-overlay.open { display: flex; }
+
+  .modal {
+    background: white;
+    width: 460px;
+    max-height: 85vh;
+    overflow-y: auto;
+    border: 2px solid var(--black);
+    box-shadow: 4px 4px 0 rgba(0,0,0,0.3);
+  }
+
+  .modal-head {
+    padding: 10px 14px;
+    background: var(--red);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .modal-title { font-size: 13px; font-weight: bold; color: white; text-transform: uppercase; letter-spacing: 0.04em; }
+
+  .modal-close {
+    width: 22px; height: 22px;
+    border: 1px solid rgba(255,255,255,0.5);
+    background: transparent;
+    cursor: pointer;
+    font-size: 12px;
+    color: white;
+    font-weight: bold;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  .modal-close:hover { background: rgba(255,255,255,0.15); }
+
+  .modal-body { padding: 16px 14px; }
+
+  .form-group { margin-bottom: 12px; }
+
+  .form-label {
+    display: block;
+    font-size: 11px;
+    color: var(--black);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: bold;
+    margin-bottom: 4px;
+  }
+
+  .form-input, .form-select {
+    width: 100%;
+    padding: 5px 8px;
+    border: 1px solid var(--border);
+    font-size: 12px;
+    font-family: var(--font);
+    color: var(--black);
+    background: white;
+    outline: none;
+  }
+
+  .form-input:focus, .form-select:focus { border-color: var(--red); }
+
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  .form-divider {
+    border: none;
+    border-top: 2px dashed var(--gray-mid);
+    margin: 14px 0 10px;
+  }
+
+  .form-section-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--gray-dark);
+    font-weight: bold;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .form-section-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--gray-mid);
+  }
+
+  .modal-footer {
+    padding: 10px 14px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    border-top: 2px solid var(--gray-mid);
+    background: var(--gray-light);
+  }
+
+  .cut-yes { color: var(--red); font-weight: bold; font-size: 13px; display: inline-block; width: 20px; text-align: center; }
+  .cut-no { color: var(--gray-mid); font-size: 13px; display: inline-block; width: 20px; text-align: center; }
+
+  .tabs {
+    display: flex;
+    margin-bottom: 14px;
+    border: 1px solid var(--border);
+    width: fit-content;
+  }
+
+  .tab {
+    padding: 5px 14px;
+    font-size: 12px;
+    font-weight: bold;
+    cursor: pointer;
+    color: var(--gray-dark);
+    background: var(--gray-light);
+    border-right: 1px solid var(--border);
+    user-select: none;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .tab:last-child { border-right: none; }
+  .tab.active { background: white; color: var(--red); border-bottom: 2px solid var(--red); }
+  .tab:hover:not(.active) { background: var(--gray-mid); }
+
+  .filter-row { display: flex; align-items: center; margin-bottom: 12px; border: 1px solid var(--border); width: fit-content; }
+
+  .filter-chip {
+    padding: 4px 12px;
+    font-size: 11px;
+    font-weight: bold;
+    border-right: 1px solid var(--border);
+    background: var(--gray-light);
+    cursor: pointer;
+    color: var(--gray-dark);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .filter-chip:last-child { border-right: none; }
+  .filter-chip.active { background: var(--red); color: white; }
+  .filter-chip:hover:not(.active) { background: var(--gray-mid); }
+
+  td.mono { font-family: Courier New, monospace; }
+
+  .price-input {
+    width: 70px;
+    padding: 3px 6px;
+    border: 1px solid var(--border);
+    font-size: 12px;
+    font-family: Courier New, monospace;
+    background: #FFFFF0;
+  }
+
+  .price-input:focus { border-color: var(--red); outline: none; }
+
+  .action-btn {
+    padding: 3px 8px;
+    border: 1px solid var(--border);
+    background: var(--gray-light);
+    font-size: 11px;
+    font-family: var(--font);
+    cursor: pointer;
+    color: var(--black);
+    font-weight: bold;
+    text-transform: uppercase;
+  }
+
+  .action-btn:hover { background: var(--red); color: white; border-color: var(--red-dark); }
+
+  .section-bar {
+    background: var(--black);
+    color: white;
+    font-size: 11px;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 5px 12px;
+  }
+
+  /* ─── CREDENTIAL LOCK SCREEN ─────────────────────────────────── */
+
+  .lock-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 400px;
+    text-align: center;
+  }
+
+  .lock-icon {
+    width: 64px;
+    height: 64px;
+    background: var(--black);
+    border: 3px solid var(--red);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 16px;
+    font-size: 26px;
+  }
+
+  .lock-title {
+    font-size: 14px;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 6px;
+  }
+
+  .lock-sub {
+    font-size: 11px;
+    color: var(--gray-dark);
+    margin-bottom: 20px;
+    line-height: 1.6;
+    max-width: 280px;
+  }
+
+  .lock-form {
+    display: flex;
+    gap: 0;
+    border: 2px solid var(--black);
+    overflow: hidden;
+  }
+
+  .lock-input {
+    padding: 8px 12px;
+    border: none;
+    font-size: 13px;
+    font-family: var(--font);
+    width: 220px;
+    outline: none;
+    letter-spacing: 0.12em;
+    background: white;
+  }
+
+  .lock-btn {
+    padding: 8px 16px;
+    background: var(--red);
+    color: white;
+    border: none;
+    font-size: 12px;
+    font-family: var(--font);
+    font-weight: bold;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .lock-btn:hover { background: var(--red-dark); }
+
+  .lock-error {
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--red-dark);
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    display: none;
+  }
+
+  .lock-error.visible { display: block; }
+
+  .cred-panel-inner { display: none; }
+  .cred-panel-inner.unlocked { display: block; }
+
+  /* Password cell */
+  .pw-cell {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: Courier New, monospace;
+    font-size: 12px;
+  }
+
+  .pw-masked { letter-spacing: 0.08em; color: var(--gray-dark); }
+
+  .pw-toggle {
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    background: var(--gray-light);
+    font-size: 10px;
+    font-family: var(--font);
+    cursor: pointer;
+    color: var(--black);
+    font-weight: bold;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .pw-toggle:hover { background: var(--black); color: white; border-color: var(--black); }
+
+  .cred-banner {
+    background: var(--black);
+    border: 2px solid var(--red);
+    padding: 8px 14px;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .cred-banner-text {
+    font-size: 11px;
+    color: #ccc;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .cred-banner-dot {
+    width: 7px;
+    height: 7px;
+    background: #22c55e;
+    border-radius: 50%;
+    box-shadow: 0 0 6px #22c55e;
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .input-pw-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  .input-pw-wrapper .form-input {
+    padding-right: 60px;
+  }
+
+  .input-pw-toggle {
+    position: absolute;
+    right: 0;
+    padding: 6px 8px;
+    background: var(--gray-light);
+    border: none;
+    border-left: 1px solid var(--border);
+    cursor: pointer;
+    font-size: 10px;
+    font-weight: bold;
+    font-family: var(--font);
+    color: var(--gray-dark);
+    text-transform: uppercase;
+    height: 100%;
+  }
+
+  .input-pw-toggle:hover { background: var(--gray-mid); }
+</style>
+</head>
+<body>
+
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-text">SEVEN STAR FOOD LLC</div>
+    <div class="logo-sub">Admin Portal</div>
+  </div>
+
+  <div class="sidebar-section">Operations</div>
+  <div class="nav-item active" onclick="showPanel('orders', this)">&#9632; Orders <span class="nav-badge">7</span></div>
+  <div class="nav-item" onclick="showPanel('packing', this)">&#9632; Packing Report</div>
+
+  <div class="sidebar-section">Catalog</div>
+  <div class="nav-item" onclick="showPanel('products', this)">&#9632; Products</div>
+  <div class="nav-item" onclick="showPanel('salmon', this)">&#9632; Salmon Cuts</div>
+  <div class="nav-item" onclick="showPanel('inventory', this)">&#9632; Inventory</div>
+
+  <div class="sidebar-section">Accounts</div>
+  <div class="nav-item" onclick="showPanel('customers', this)">&#9632; Customers</div>
+  <div class="nav-item" onclick="showPanel('credentials', this)">&#9632; Credentials &#128274;</div>
+
+  <div class="sidebar-footer">
+    <div class="user-name">Seung Lee</div>
+    <div style="margin-top:2px;">Owner &nbsp;|&nbsp; Seven Star Food</div>
+  </div>
+</nav>
+
+<div class="main">
+  <div class="topbar">
+    <div class="page-title" id="page-title">Orders</div>
+    <div style="width:1px;height:20px;background:var(--gray-mid);margin:0 4px;"></div>
+    <div style="font-size:11px;color:var(--gray-dark);" id="topbar-date"></div>
+    <div class="topbar-right">
+      <button class="btn btn-primary" id="topbar-primary-btn" onclick="handlePrimaryBtn()">+ NEW ORDER</button>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- ORDERS -->
+    <div class="panel active" id="panel-orders">
+      <div class="stat-grid">
+        <div class="stat-card accent">
+          <div class="stat-label">Pending Action</div>
+          <div class="stat-value">3</div>
+          <div class="stat-change">Needs processing</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Today's Orders</div>
+          <div class="stat-value">7</div>
+          <div class="stat-change">+2 since yesterday</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Today's Revenue</div>
+          <div class="stat-value">$4,820</div>
+          <div class="stat-change">+12% this week</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Active Customers</div>
+          <div class="stat-value">38</div>
+          <div class="stat-change">Total accounts</div>
+        </div>
+      </div>
+
+      <div class="filter-row">
+        <div class="filter-chip active" onclick="setFilter(this,'all')">All (7)</div>
+        <div class="filter-chip" onclick="setFilter(this,'pending')">Pending (3)</div>
+        <div class="filter-chip" onclick="setFilter(this,'processing')">Processing (2)</div>
+        <div class="filter-chip" onclick="setFilter(this,'complete')">Complete (2)</div>
+      </div>
+
+      <div class="order-grid" id="order-grid"></div>
+    </div>
+
+    <!-- PACKING REPORT -->
+    <div class="panel" id="panel-packing">
+      <div style="display:flex;gap:10px;margin-bottom:14px;align-items:flex-end;">
+        <div>
+          <div style="font-size:11px;font-weight:bold;text-transform:uppercase;margin-bottom:4px;">Date</div>
+          <input type="date" class="form-input" value="2026-04-21" style="width:150px;">
+        </div>
+        <button class="btn btn-primary">GENERATE REPORT</button>
+        <button class="btn btn-outline">EXPORT PDF</button>
+      </div>
+
+      <div class="section-bar">Fresh Fish</div>
+      <div class="table-card" style="margin-top:0;border-top:none;">
+        <table>
+          <thead><tr><th>Product</th><th>Customer</th><th>Qty / Unit</th><th>Cut Type</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td>Salmon Fillet</td><td>AA Sushi</td><td class="mono">2 × 5 lb</td><td><span class="badge badge-gray">D-Trim</span></td><td>Skin Off, Scale</td></tr>
+            <tr><td>Salmon Fillet</td><td>Aji Newcastle</td><td class="mono">4 × 5 lb</td><td><span class="badge badge-gray">Half</span></td><td>Skin Off</td></tr>
+            <tr><td>Salmon Fillet</td><td>Akasaka Sushi</td><td class="mono">2 × 5 lb</td><td><span class="badge badge-gray">Half</span></td><td>Skin Off, Scale</td></tr>
+            <tr><td>Tuna (Bluefin)</td><td>Aji Issaquah</td><td class="mono">1 × 10 lb</td><td>—</td><td></td></tr>
+            <tr><td>Hamachi</td><td>Asahi Sushi</td><td class="mono">2 × 4 lb</td><td>—</td><td></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="section-bar">Frozen / Pantry</div>
+      <div class="table-card" style="margin-top:0;border-top:none;">
+        <table>
+          <thead><tr><th>Product</th><th>Customer</th><th>Qty / Unit</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td>Rice Cake Tteokguk 2LB</td><td>45th Poke Bar</td><td class="mono">3 CA</td><td></td></tr>
+            <tr><td>Avocado (48 ct)</td><td>AA Sushi Kirkland</td><td class="mono">2 CA</td><td></td></tr>
+            <tr><td>Bamboo Shoots 10/2.2LB</td><td>Arigato</td><td class="mono">5 CA</td><td></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- PRODUCTS -->
+    <div class="panel" id="panel-products">
+      <div class="tabs">
+        <div class="tab active" onclick="switchTab(this)">All Products</div>
+        <div class="tab" onclick="switchTab(this)">Seafood</div>
+        <div class="tab" onclick="switchTab(this)">Produce / Pantry</div>
+      </div>
+      <div class="table-card">
+        <div class="table-header">
+          <div class="table-title">Product Catalog</div>
+          <div class="table-count">6 items</div>
+          <input class="search-input" placeholder="Search..." oninput="filterProducts(this.value)">
+        </div>
+        <table>
+          <thead><tr><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Sale Price</th><th>On Hand</th><th>Status</th><th>Action</th></tr></thead>
+          <tbody id="product-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- SALMON CUTS -->
+    <div class="panel" id="panel-salmon">
+      <p style="font-size:12px;color:var(--gray-dark);margin-bottom:12px;line-height:1.6;">Per-customer salmon cutting specs. Applied automatically to daily packing reports.</p>
+      <div class="table-card">
+        <div class="table-header">
+          <div class="table-title">Salmon Cut Preferences</div>
+          <div class="table-count">15 customers</div>
+          <input class="search-input" placeholder="Search customer..." oninput="filterCuts(this.value)">
+        </div>
+        <table>
+          <thead><tr><th>Customer</th><th>Cut Type</th><th style="text-align:center;">Skin Off</th><th style="text-align:center;">Scale</th><th style="text-align:center;">PBO H&G</th><th>Action</th></tr></thead>
+          <tbody id="cut-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- INVENTORY -->
+    <div class="panel" id="panel-inventory">
+      <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);">
+        <div class="stat-card"><div class="stat-label">Total SKUs</div><div class="stat-value">6</div></div>
+        <div class="stat-card accent"><div class="stat-label">Out of Stock</div><div class="stat-value">2</div></div>
+        <div class="stat-card"><div class="stat-label">Low Stock</div><div class="stat-value">1</div></div>
+      </div>
+      <div class="table-card">
+        <div class="table-header"><div class="table-title">Inventory Levels</div></div>
+        <table>
+          <thead><tr><th>SKU</th><th>Product</th><th>Unit</th><th>Qty on Hand</th><th>Reorder Pt</th><th>Status</th><th>Update Qty</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">CBAMBOO-RAMEN</td><td>Menma Ajitsuki Ramen-Yo</td><td>CA</td><td class="mono">4</td><td class="mono">—</td><td><span class="badge badge-amber">LOW</span></td><td><input type="number" class="price-input" value="4"></td></tr>
+            <tr><td class="mono">CAVOCADO</td><td>Avocado 48 ct / Box</td><td>CA</td><td class="mono">0</td><td class="mono">—</td><td><span class="badge badge-red">OUT OF STOCK</span></td><td><input type="number" class="price-input" value="0"></td></tr>
+            <tr><td class="mono">CBAMBOO-SH</td><td>Bamboo Shoots 10/2.2LB</td><td>ea</td><td class="mono">72</td><td class="mono">5</td><td><span class="badge badge-green">IN STOCK</span></td><td><input type="number" class="price-input" value="72"></td></tr>
+            <tr><td class="mono">CASS-RICECAKE</td><td>Rice Cake Tteokguk 2LB</td><td>CA</td><td class="mono">0</td><td class="mono">—</td><td><span class="badge badge-red">OUT OF STOCK</span></td><td><input type="number" class="price-input" value="0"></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- CUSTOMERS -->
+    <div class="panel" id="panel-customers">
+      <div class="table-card">
+        <div class="table-header">
+          <div class="table-title">Customer Accounts</div>
+          <div class="table-count" id="customer-count">14 active</div>
+          <input class="search-input" placeholder="Search customers..." oninput="filterCustomers(this.value)">
+        </div>
+        <table>
+          <thead><tr><th>Company</th><th>Contact</th><th>Phone</th><th>Balance</th><th>Status</th><th>Action</th></tr></thead>
+          <tbody id="customer-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- CREDENTIALS (password-gated) -->
+    <div class="panel" id="panel-credentials">
+
+      <!-- Lock Screen -->
+      <div class="lock-screen" id="cred-lock">
+        <div class="lock-icon">&#128274;</div>
+        <div class="lock-title">Credentials Vault</div>
+        <div class="lock-sub">This section contains customer login credentials. Enter the admin vault password to continue.</div>
+        <div class="lock-form">
+          <input type="password" class="lock-input" id="vault-pw-input" placeholder="Vault password" onkeydown="if(event.key==='Enter')unlockVault()">
+          <button class="lock-btn" onclick="unlockVault()">UNLOCK</button>
+        </div>
+        <div class="lock-error" id="lock-error">&#10005; Incorrect password. Try again.</div>
+        <div style="margin-top:20px;font-size:10px;color:var(--gray-dark);text-transform:uppercase;letter-spacing:0.06em;">
+          Default vault password: <strong>Admin@7Star</strong>
+        </div>
+      </div>
+
+      <!-- Unlocked Content -->
+      <div class="cred-panel-inner" id="cred-content">
+        <div class="cred-banner">
+          <div class="cred-banner-text">
+            <div class="cred-banner-dot"></div>
+            Vault unlocked &mdash; credentials visible. Re-navigate to lock.
+          </div>
+          <button class="btn btn-danger" onclick="lockVault()" style="font-size:11px;padding:4px 10px;">&#128274; LOCK NOW</button>
+        </div>
+
+        <div class="table-card">
+          <div class="table-header">
+            <div class="table-title">Customer Login Credentials</div>
+            <div class="table-count" id="cred-count">0 accounts</div>
+            <input class="search-input" placeholder="Search..." oninput="filterCredentials(this.value)">
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Company</th>
+                <th>Username / Email</th>
+                <th>Password</th>
+                <th>Created</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="cred-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+</div>
+
+<!-- MODAL: New Customer -->
+<div class="modal-overlay" id="modal-customer">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title">New Customer</div>
+      <button class="modal-close" onclick="closeModal('modal-customer')">X</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">First Name</label><input class="form-input" id="nc-first" placeholder="First name"></div>
+        <div class="form-group"><label class="form-label">Last Name</label><input class="form-input" id="nc-last" placeholder="Last name"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Company Name</label><input class="form-input" id="nc-company" placeholder="Restaurant / company name"></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Phone</label><input class="form-input" id="nc-phone" placeholder="206-000-0000"></div>
+        <div class="form-group"><label class="form-label">Email</label><input class="form-input" id="nc-email" placeholder="email@restaurant.com"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Language Preference</label>
+        <select class="form-select" id="nc-lang"><option>English</option><option>Korean</option><option>Chinese</option><option>Japanese</option><option>Vietnamese</option></select>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Salmon Cut</label>
+          <select class="form-select" id="nc-cut"><option>D-Trim</option><option>Half</option><option>Half-Cut</option><option>Bags</option><option>Skin Off</option><option>N/A</option></select>
+        </div>
+        <div class="form-group"><label class="form-label">Skin Off?</label>
+          <select class="form-select" id="nc-skinoff"><option>Yes</option><option>No</option></select>
+        </div>
+      </div>
+      <div class="form-group"><label class="form-label">Notes</label><input class="form-input" id="nc-notes" placeholder="Delivery or special order notes..."></div>
+
+      <!-- ── Account Credentials ── -->
+      <hr class="form-divider">
+      <div class="form-section-label">Portal Login Credentials</div>
+      <div class="form-group">
+        <label class="form-label">Username / Email</label>
+        <input class="form-input" id="nc-username" placeholder="e.g. aasushi or contact@aasushi.com">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <div class="input-pw-wrapper">
+            <input class="form-input" type="password" id="nc-password" placeholder="Set password">
+            <button type="button" class="input-pw-toggle" onclick="togglePwInput('nc-password', this)">SHOW</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Confirm Password</label>
+          <div class="input-pw-wrapper">
+            <input class="form-input" type="password" id="nc-password2" placeholder="Repeat password">
+            <button type="button" class="input-pw-toggle" onclick="togglePwInput('nc-password2', this)">SHOW</button>
+          </div>
+        </div>
+      </div>
+      <div id="nc-pw-error" style="font-size:11px;color:var(--red-dark);font-weight:bold;display:none;margin-top:-6px;margin-bottom:4px;">&#10005; Passwords do not match.</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-customer')">CANCEL</button>
+      <button class="btn btn-primary" onclick="createCustomer()">CREATE CUSTOMER</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: New Product -->
+<div class="modal-overlay" id="modal-product">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title">Add Product</div>
+      <button class="modal-close" onclick="closeModal('modal-product')">X</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">SKU</label><input class="form-input" placeholder="e.g. CSALMON-FILLET"></div>
+        <div class="form-group"><label class="form-label">Category</label>
+          <select class="form-select"><option>Seafood — Fresh</option><option>Seafood — Frozen</option><option>Produce</option><option>Pantry / Dry</option></select>
+        </div>
+      </div>
+      <div class="form-group"><label class="form-label">Product Description</label><input class="form-input" placeholder="Full name as it appears on invoices"></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Unit of Measure</label>
+          <select class="form-select"><option>lb (pound)</option><option>ea (each)</option><option>CA (case)</option><option>kg</option></select>
+        </div>
+        <div class="form-group"><label class="form-label">Qty on Hand</label><input class="form-input" type="number" placeholder="0"></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Cost (per unit)</label><input class="form-input" placeholder="$0.00" type="number" step="0.01"></div>
+        <div class="form-group"><label class="form-label">Sale Price (per unit)</label><input class="form-input" placeholder="$0.00" type="number" step="0.01"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Preferred Vendor</label><input class="form-input" placeholder="e.g. Mutual Trading (SEA)"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-product')">CANCEL</button>
+      <button class="btn btn-primary">ADD TO CATALOG</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: New Order -->
+<div class="modal-overlay" id="modal-order">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title">Manual Order Entry</div>
+      <button class="modal-close" onclick="closeModal('modal-order')">X</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Customer</label>
+        <select class="form-select"><option>AA Sushi</option><option>Aji Newcastle</option><option>Aji Issaquah</option><option>Akasaka Sushi</option><option>Asahi Sushi</option><option>45th Poke Bar</option></select>
+      </div>
+      <div class="form-group"><label class="form-label">Delivery Date</label><input class="form-input" type="date" value="2026-04-22"></div>
+      <div style="font-size:11px;font-weight:bold;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px;">Order Items</div>
+      <div style="display:flex;flex-direction:column;gap:6px;" id="order-items-list">
+        <div style="display:grid;grid-template-columns:2fr 80px 70px;gap:6px;align-items:center;">
+          <select class="form-select"><option>Salmon Fillet</option><option>Hamachi</option><option>Tuna Bluefin</option><option>Avocado (48ct)</option><option>Bamboo Shoots</option></select>
+          <input class="form-input" placeholder="Qty" type="number" value="10">
+          <select class="form-select"><option>lb</option><option>ea</option><option>CA</option></select>
+        </div>
+      </div>
+      <button class="btn btn-outline" style="width:100%;margin-top:8px;font-size:11px;" onclick="addOrderItem()">+ ADD ITEM</button>
+      <div class="form-group" style="margin-top:12px;"><label class="form-label">Notes (cut, packaging)</label><input class="form-input" placeholder="e.g. D-Trim, Skin Off"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-order')">CANCEL</button>
+      <button class="btn btn-primary">SUBMIT + GENERATE INVOICE</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const VAULT_PASSWORD = 'Admin@7Star';
+let vaultUnlocked = false;
+
+const ORDERS = [
+  { id:'ORD-041', customer:'AA Sushi', time:'11:48 PM', items:'Salmon 10lb, Hamachi 8lb, Tuna 5lb', total:'$487.00', status:'pending' },
+  { id:'ORD-042', customer:'Aji Newcastle', time:'12:02 AM', items:'Salmon 20lb, Avocado 2CA', total:'$892.00', status:'pending' },
+  { id:'ORD-043', customer:'Akasaka Sushi', time:'12:15 AM', items:'Salmon 8lb', total:'$176.00', status:'processing' },
+  { id:'ORD-044', customer:'Asahi Sushi', time:'1:03 AM', items:'Hamachi 6lb, Bamboo Shoots 3CA', total:'$223.50', status:'pending' },
+  { id:'ORD-045', customer:'Aji Issaquah', time:'1:20 AM', items:'Salmon 15lb, Tuna 10lb', total:'$680.00', status:'processing' },
+  { id:'ORD-046', customer:'45th Poke Bar', time:'9:15 AM', items:'Avocado 3CA, Rice Cake 2CA', total:'$255.00', status:'complete' },
+  { id:'ORD-047', customer:'Arigato', time:'9:45 AM', items:'Bamboo Shoots 5ea, Garlic Pickle 4ea', total:'$63.70', status:'complete' },
+];
+
+const PRODUCTS = [
+  { sku:'C-GARLIC', desc:'Garlic Stem Pickle', unit:'ea', cost:'$2.99', price:'$3.99', qty:'—', status:'active' },
+  { sku:'C-PERILLA', desc:'Seasoned Perilla Leaves', unit:'ea', cost:'$2.99', price:'$3.99', qty:'—', status:'active' },
+  { sku:'CASS-RICECAKE', desc:'Rice Cake Tteokguk 2LB / 20 PKS', unit:'CA', cost:'$44.00', price:'$50.00', qty:'0', status:'oos' },
+  { sku:'CAVOCADO', desc:'Avocado 48 ct / Box', unit:'CA', cost:'$25.00', price:'$35.00', qty:'0', status:'oos' },
+  { sku:'CBAMBOO-RAMEN', desc:'Menma Ajitsuki 15/2.2LB Ramen-Yo', unit:'CA', cost:'$142.50', price:'$169.50', qty:'4', status:'low' },
+  { sku:'CBAMBOO-SH', desc:'Bamboo Shoots 10/2.2LB Seasoned', unit:'ea', cost:'$6.44', price:'$9.45', qty:'72', status:'active' },
+];
+
+// In-memory customer + credentials store
+let CUSTOMERS = [
+  { company:'2 GO PACKAGE', contact:'Mr. Kang', phone:'206-694-9172', balance:'$0.00', username:'', password:'', created:'' },
+  { company:'45TH POKE BAR', contact:'—', phone:'—', balance:'$0.00', username:'', password:'', created:'' },
+  { company:'45TH STOP AND SHOP POKE', contact:'—', phone:'—', balance:'$293.09', username:'', password:'', created:'' },
+  { company:'AA SUSHI', contact:'Anthony Christianto', phone:'425-344-4398', balance:'$1,009.60', username:'aasushi', password:'Sushi@2024!', created:'2024-01-15' },
+  { company:'AA SUSHI KIRKLAND', contact:'—', phone:'—', balance:'$1,698.64', username:'aasushikirkland', password:'Kirk@AA99', created:'2024-02-03' },
+  { company:'AIRPORT PIZZERIA LLC', contact:'—', phone:'—', balance:'$1,005.59', username:'', password:'', created:'' },
+  { company:'AJI ISSAQUAH', contact:'—', phone:'—', balance:'$2,204.33', username:'aji.issaquah', password:'Issaquah#01', created:'2024-03-10' },
+  { company:'AJI KOHARU', contact:'Tie Cheng Jin', phone:'626-497-6574', balance:'$0.00', username:'', password:'', created:'' },
+  { company:'AJI NEWCASTLE', contact:'Daniel', phone:'425-572-6504', balance:'$33,590.93', username:'daniel.newcastle', password:'Newcastle$8', created:'2023-11-20' },
+  { company:'AKASAKA SUSHI', contact:'—', phone:'—', balance:'$60.00', username:'akasaka', password:'Aka$ushi22', created:'2024-04-01' },
+  { company:'AKEBONO JAPANESE CUISINE', contact:'Yuta Toyosima', phone:'—', balance:'$0.00', username:'', password:'', created:'' },
+  { company:'APPA SUSHI', contact:'Stanley Jeong', phone:'—', balance:'$0.00', username:'', password:'', created:'' },
+  { company:'ARIGATO', contact:'—', phone:'—', balance:'$129.44', username:'', password:'', created:'' },
+  { company:'ASAHI SUSHI', contact:'—', phone:'360-705-8000', balance:'$0.00', username:'asahisushi', password:'Asahi@WA5', created:'2024-04-18' },
+];
+
+const CUTS = [
+  { customer:'45TH STOP AND SHOP POKE', cut:'D-Trim', skinOff:true, scale:false, pbohg:false },
+  { customer:'AA SUSHI', cut:'D-Trim', skinOff:true, scale:true, pbohg:false },
+  { customer:'ABURIYA BENTO HOUSE', cut:'Half', skinOff:true, scale:true, pbohg:false },
+  { customer:'AIRPORT PIZZERIA LLC', cut:'Bags', skinOff:true, scale:false, pbohg:false },
+  { customer:'AJI ISSAQUAH', cut:'D-Trim', skinOff:true, scale:true, pbohg:false },
+  { customer:'AJI KOHARU', cut:'Half-Cut', skinOff:true, scale:true, pbohg:false },
+  { customer:'AJI NEWCASTLE', cut:'Half', skinOff:true, scale:false, pbohg:false },
+  { customer:'AKASAKA SUSHI', cut:'Half', skinOff:true, scale:true, pbohg:false },
+  { customer:'AKEBONO JAPANESE', cut:'D-Trim', skinOff:true, scale:true, pbohg:false },
+  { customer:'ARIGATO', cut:'D-Trim', skinOff:true, scale:true, pbohg:false },
+  { customer:'ASAHI SUSHI', cut:'D-Trim', skinOff:true, scale:false, pbohg:false },
+  { customer:'AYA SUSHI', cut:'D-Trim', skinOff:true, scale:true, pbohg:false },
+  { customer:'B & E Meats (Skin Off)', cut:'D-Trim', skinOff:true, scale:false, pbohg:true },
+  { customer:'B & E Meats (Skin On)', cut:'D-Trim', skinOff:false, scale:true, pbohg:false },
+  { customer:'B & E QUEEN ANNE (SKIN ON)', cut:'D-Trim', skinOff:false, scale:true, pbohg:false },
+];
+
+/* ─── Helpers ─────────────────────────────────────────────────── */
+
+function statusBadge(s) {
+  if (s==='pending') return '<span class="badge badge-amber">PENDING</span>';
+  if (s==='processing') return '<span class="badge badge-gray">PROCESSING</span>';
+  return '<span class="badge badge-green">COMPLETE</span>';
+}
+
+function productStatus(s) {
+  if (s==='oos') return '<span class="badge badge-red">OUT OF STOCK</span>';
+  if (s==='low') return '<span class="badge badge-amber">LOW</span>';
+  return '<span class="badge badge-green">ACTIVE</span>';
+}
+
+function check(v) {
+  return v ? '<span class="cut-yes">&#10004;</span>' : '<span class="cut-no">—</span>';
+}
+
+function maskPassword(pw) {
+  if (!pw) return '<span style="color:var(--gray-mid);font-style:italic;">not set</span>';
+  return '&bull;'.repeat(Math.min(pw.length, 10));
+}
+
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/* ─── Render functions ────────────────────────────────────────── */
+
+function initOrders(filter) {
+  const list = (!filter||filter==='all') ? ORDERS : ORDERS.filter(o=>o.status===filter);
+  document.getElementById('order-grid').innerHTML = list.map(o=>`
+    <div class="order-card">
+      <div class="order-card-top">
+        <div><div class="order-customer">${o.customer}</div><div class="order-time">${o.id} &nbsp;|&nbsp; ${o.time}</div></div>
+        ${statusBadge(o.status)}
+      </div>
+      <div class="order-items">${o.items}</div>
+      <div class="order-footer">
+        <span class="order-total">${o.total}</span>
+        <button class="action-btn">VIEW &rarr;</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function initProducts(q) {
+  const list = q ? PRODUCTS.filter(p=>p.desc.toLowerCase().includes(q.toLowerCase())||p.sku.toLowerCase().includes(q.toLowerCase())) : PRODUCTS;
+  document.getElementById('product-body').innerHTML = list.map(p=>`
+    <tr>
+      <td class="mono" style="font-size:11px;">${p.sku}</td>
+      <td>${p.desc}</td>
+      <td class="mono">${p.unit}</td>
+      <td class="mono">${p.cost}</td>
+      <td><input type="text" class="price-input" value="${p.price}"></td>
+      <td class="mono">${p.qty}</td>
+      <td>${productStatus(p.status)}</td>
+      <td><button class="action-btn">EDIT</button></td>
+    </tr>
+  `).join('');
+}
+
+function initCuts(q) {
+  const list = q ? CUTS.filter(c=>c.customer.toLowerCase().includes(q.toLowerCase())) : CUTS;
+  document.getElementById('cut-body').innerHTML = list.map(c=>`
+    <tr>
+      <td style="font-weight:bold;">${c.customer}</td>
+      <td><span class="badge badge-gray">${c.cut}</span></td>
+      <td style="text-align:center;">${check(c.skinOff)}</td>
+      <td style="text-align:center;">${check(c.scale)}</td>
+      <td style="text-align:center;">${check(c.pbohg)}</td>
+      <td><button class="action-btn">EDIT</button></td>
+    </tr>
+  `).join('');
+}
+
+function initCustomers(q) {
+  const list = q ? CUSTOMERS.filter(c=>c.company.toLowerCase().includes(q.toLowerCase())) : CUSTOMERS;
+  document.getElementById('customer-count').textContent = list.length + ' active';
+  document.getElementById('customer-body').innerHTML = list.map((c,i)=>`
+    <tr>
+      <td style="font-weight:bold;">${c.company}</td>
+      <td style="color:var(--gray-dark);font-size:12px;">${c.contact}</td>
+      <td class="mono" style="font-size:12px;">${c.phone}</td>
+      <td class="mono">${c.balance}</td>
+      <td><span class="badge badge-green">ACTIVE</span></td>
+      <td><button class="action-btn">VIEW</button></td>
+    </tr>
+  `).join('');
+}
+
+function initCredentials(q) {
+  const withCreds = CUSTOMERS.filter(c => c.username || c.password);
+  const list = q ? withCreds.filter(c=>c.company.toLowerCase().includes(q.toLowerCase())||c.username.toLowerCase().includes(q.toLowerCase())) : withCreds;
+  document.getElementById('cred-count').textContent = list.length + ' accounts';
+  document.getElementById('cred-body').innerHTML = list.map((c, i) => `
+    <tr id="cred-row-${i}">
+      <td style="font-weight:bold;">${c.company}</td>
+      <td class="mono" style="font-size:12px;">${c.username || '<span style="color:var(--gray-mid);font-style:italic;">—</span>'}</td>
+      <td>
+        <div class="pw-cell">
+          <span class="pw-masked" id="pw-display-${i}">${maskPassword(c.password)}</span>
+          ${c.password ? `<button class="pw-toggle" onclick="revealPw(${i}, '${c.password.replace(/'/g,"\\'")}', this)">SHOW</button>` : ''}
+        </div>
+      </td>
+      <td style="color:var(--gray-dark);font-size:11px;">${c.created || '—'}</td>
+      <td style="display:flex;gap:4px;">
+        <button class="action-btn" onclick="editCred(${CUSTOMERS.indexOf(c)})">EDIT</button>
+        <button class="action-btn" style="color:var(--red-dark);" onclick="deleteCred(${CUSTOMERS.indexOf(c)})">REMOVE</button>
+      </td>
+    </tr>
+  `).join('');
+
+  if (list.length === 0) {
+    document.getElementById('cred-body').innerHTML = `
+      <tr><td colspan="5" style="text-align:center;padding:24px;color:var(--gray-dark);font-style:italic;">
+        No customer credentials on file. Add credentials when creating or editing a customer account.
+      </td></tr>`;
+  }
+}
+
+/* ─── Vault lock / unlock ──────────────────────────────────────── */
+
+function unlockVault() {
+  const input = document.getElementById('vault-pw-input').value;
+  const err = document.getElementById('lock-error');
+  if (input === VAULT_PASSWORD) {
+    vaultUnlocked = true;
+    document.getElementById('cred-lock').style.display = 'none';
+    document.getElementById('cred-content').classList.add('unlocked');
+    err.classList.remove('visible');
+    initCredentials();
+  } else {
+    err.classList.add('visible');
+    document.getElementById('vault-pw-input').value = '';
+    document.getElementById('vault-pw-input').focus();
+  }
+}
+
+function lockVault() {
+  vaultUnlocked = false;
+  document.getElementById('cred-lock').style.display = '';
+  document.getElementById('cred-content').classList.remove('unlocked');
+  document.getElementById('vault-pw-input').value = '';
+  document.getElementById('lock-error').classList.remove('visible');
+}
+
+/* ─── Password reveal in credentials table ─────────────────────── */
+
+function revealPw(idx, pw, btn) {
+  const display = document.getElementById('pw-display-' + idx);
+  if (btn.textContent === 'SHOW') {
+    display.textContent = pw;
+    display.style.color = 'var(--black)';
+    btn.textContent = 'HIDE';
+  } else {
+    display.innerHTML = maskPassword(pw);
+    display.style.color = '';
+    btn.textContent = 'SHOW';
+  }
+}
+
+/* ─── Create customer ──────────────────────────────────────────── */
+
+function createCustomer() {
+  const pw1 = document.getElementById('nc-password').value;
+  const pw2 = document.getElementById('nc-password2').value;
+  const pwErr = document.getElementById('nc-pw-error');
+
+  if (pw1 !== pw2) {
+    pwErr.style.display = 'block';
+    return;
+  }
+  pwErr.style.display = 'none';
+
+  const company = document.getElementById('nc-company').value.trim().toUpperCase() || 'NEW CUSTOMER';
+  const contact = [document.getElementById('nc-first').value.trim(), document.getElementById('nc-last').value.trim()].filter(Boolean).join(' ') || '—';
+  const phone = document.getElementById('nc-phone').value.trim() || '—';
+  const username = document.getElementById('nc-username').value.trim();
+
+  CUSTOMERS.push({
+    company,
+    contact,
+    phone,
+    balance: '$0.00',
+    username,
+    password: pw1,
+    created: today(),
+  });
+
+  initCustomers();
+  closeModal('modal-customer');
+
+  // clear form
+  ['nc-first','nc-last','nc-company','nc-phone','nc-email','nc-notes','nc-username','nc-password','nc-password2'].forEach(id=>{
+    document.getElementById(id).value = '';
+  });
+}
+
+/* ─── Edit / delete credential (inline stub) ───────────────────── */
+
+function editCred(customerIndex) {
+  const c = CUSTOMERS[customerIndex];
+  const newUsername = prompt('Edit username for ' + c.company + ':', c.username);
+  if (newUsername === null) return;
+  const newPw = prompt('Edit password (leave blank to keep current):', '');
+  if (newPw === null) return;
+  c.username = newUsername.trim();
+  if (newPw.trim()) c.password = newPw.trim();
+  initCredentials();
+}
+
+function deleteCred(customerIndex) {
+  const c = CUSTOMERS[customerIndex];
+  if (!confirm('Remove credentials for ' + c.company + '? The customer account will remain.')) return;
+  c.username = '';
+  c.password = '';
+  c.created = '';
+  initCredentials();
+}
+
+/* ─── Show/hide password input toggle ─────────────────────────── */
+
+function togglePwInput(inputId, btn) {
+  const inp = document.getElementById(inputId);
+  if (inp.type === 'password') {
+    inp.type = 'text';
+    btn.textContent = 'HIDE';
+  } else {
+    inp.type = 'password';
+    btn.textContent = 'SHOW';
+  }
+}
+
+/* ─── Panel navigation ─────────────────────────────────────────── */
+
+function showPanel(name, el) {
+  // Auto-lock vault when leaving
+  if (name !== 'credentials' && vaultUnlocked) lockVault();
+
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('panel-'+name).classList.add('active');
+  el.classList.add('active');
+  const titles = {orders:'Orders',packing:'Packing Report',products:'Products',salmon:'Salmon Cuts',inventory:'Inventory',customers:'Customers',credentials:'Credentials'};
+  document.getElementById('page-title').textContent = titles[name]||name;
+  const labels = {orders:'+ NEW ORDER',packing:'GENERATE REPORT',products:'+ ADD PRODUCT',salmon:'+ ADD CUT SPEC',inventory:'UPDATE INVENTORY',customers:'+ NEW CUSTOMER',credentials:'+ ADD CREDENTIALS'};
+  document.getElementById('topbar-primary-btn').textContent = labels[name]||'+ NEW';
+  // hide Add Credentials button (no modal yet)
+  document.getElementById('topbar-primary-btn').style.display = name === 'credentials' ? 'none' : '';
+}
+
+function handlePrimaryBtn() {
+  const t = document.getElementById('page-title').textContent;
+  if (t==='Orders') openModal('modal-order');
+  else if (t==='Products'||t==='Inventory') openModal('modal-product');
+  else if (t==='Customers') openModal('modal-customer');
+}
+
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+function setFilter(el,f) {
+  document.querySelectorAll('.filter-chip').forEach(c=>c.classList.remove('active'));
+  el.classList.add('active');
+  initOrders(f);
+}
+
+function switchTab(el) {
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+}
+
+function filterProducts(q) { initProducts(q); }
+function filterCuts(q) { initCuts(q); }
+function filterCustomers(q) { initCustomers(q); }
+function filterCredentials(q) { initCredentials(q); }
+
+function addOrderItem() {
+  const list = document.getElementById('order-items-list');
+  const div = document.createElement('div');
+  div.style.cssText='display:grid;grid-template-columns:2fr 80px 70px;gap:6px;align-items:center;';
+  div.innerHTML=`<select class="form-select"><option>Salmon Fillet</option><option>Hamachi</option><option>Tuna Bluefin</option><option>Avocado (48ct)</option><option>Bamboo Shoots</option></select><input class="form-input" placeholder="Qty" type="number" value="1"><select class="form-select"><option>lb</option><option>ea</option><option>CA</option></select>`;
+  list.appendChild(div);
+}
+
+document.querySelectorAll('.modal-overlay').forEach(m=>{
+  m.addEventListener('click',function(e){if(e.target===this)this.classList.remove('open');});
+});
+
+const now = new Date();
+document.getElementById('topbar-date').textContent = now.toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+
+initOrders(); initProducts(); initCuts(); initCustomers();
+</script>
+</body>
+</html>
