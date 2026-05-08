@@ -1,4 +1,5 @@
 require('dotenv').config();
+const path = require('path');
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
@@ -14,8 +15,9 @@ const { purgeOldOrders } = require('./controllers/ordersController');
 
 const app = express();
 
-app.use(helmet());
+app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
+app.use(express.static(path.join(__dirname, '../public')));
 
 // QB webhooks need raw body for signature verification — mount before json middleware
 app.use('/api/webhooks', webhookRoutes);

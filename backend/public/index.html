@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Seven Star Food — Admin Portal</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --red: #C00000; --red-dark: #8B0000; --red-light: #F2DCDB;
+    --white: #FFFFFF; --gray-light: #F2F2F2; --gray-mid: #D9D9D9;
+    --gray-dark: #595959; --black: #1A1A1A; --border: #BFBFBF;
+    --font: Arial, sans-serif;
+  }
+  body { font-family: var(--font); background: var(--gray-light); color: var(--black); font-size: 13px; }
+
+  /* ── Login ── */
+  #login-screen {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; background: var(--black);
+  }
+  .login-box {
+    background: white; border: 2px solid var(--red); width: 340px; padding: 0;
+    box-shadow: 6px 6px 0 rgba(192,0,0,0.4);
+  }
+  .login-head {
+    background: var(--red); padding: 16px 18px;
+    border-bottom: 3px solid var(--red-dark);
+  }
+  .login-head .logo-text { color: white; font-size: 14px; font-weight: bold; }
+  .login-head .logo-sub { color: rgba(255,255,255,0.65); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
+  .login-body { padding: 20px 18px; }
+  .login-label { display: block; font-size: 10px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; color: var(--black); }
+  .login-input {
+    width: 100%; padding: 7px 10px; border: 1px solid var(--border);
+    font-size: 13px; font-family: var(--font); margin-bottom: 12px; outline: none;
+  }
+  .login-input:focus { border-color: var(--red); }
+  .login-btn {
+    width: 100%; padding: 9px; background: var(--red); color: white;
+    border: none; font-size: 13px; font-family: var(--font); font-weight: bold;
+    cursor: pointer; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .login-btn:hover { background: var(--red-dark); }
+  .login-error { font-size: 11px; color: var(--red-dark); font-weight: bold; margin-top: 8px; display: none; }
+
+  /* ── App shell ── */
+  #app { display: none; height: 100vh; overflow: hidden; flex-direction: row; }
+
+  .sidebar {
+    width: 200px; background: var(--black); display: flex;
+    flex-direction: column; flex-shrink: 0; height: 100vh; overflow-y: auto;
+  }
+  .sidebar-logo { background: var(--red); padding: 14px 14px 12px; border-bottom: 3px solid var(--red-dark); }
+  .logo-text { color: white; font-size: 13px; font-weight: bold; line-height: 1.3; }
+  .logo-sub { color: rgba(255,255,255,0.65); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
+  .sidebar-section { padding: 12px 12px 4px; font-size: 9px; color: #888; text-transform: uppercase; letter-spacing: 0.08em; border-top: 1px solid #333; margin-top: 6px; }
+  .sidebar-section:first-of-type { margin-top: 0; border-top: none; }
+  .nav-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; color: #CCCCCC; font-size: 12px; transition: background 0.1s; user-select: none; border-left: 3px solid transparent; }
+  .nav-item:hover { background: #2A2A2A; color: white; }
+  .nav-item.active { background: #2A2A2A; color: white; border-left: 3px solid var(--red); }
+  .sidebar-footer { margin-top: auto; padding: 10px 12px; border-top: 1px solid #333; background: #111; font-size: 11px; color: #888; }
+  .user-name { color: #CCC; font-weight: bold; font-size: 12px; }
+
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .topbar { background: var(--white); border-bottom: 2px solid var(--gray-mid); padding: 0 20px; height: 44px; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+  .page-title { font-size: 14px; font-weight: bold; color: var(--black); text-transform: uppercase; letter-spacing: 0.03em; }
+  .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .btn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; font-size: 12px; font-family: var(--font); font-weight: bold; cursor: pointer; border: 1px solid; }
+  .btn-primary { background: var(--red); color: white; border-color: var(--red-dark); }
+  .btn-primary:hover { background: var(--red-dark); }
+  .btn-outline { background: white; color: var(--black); border-color: var(--border); }
+  .btn-outline:hover { background: var(--gray-light); }
+  .btn-danger { background: #8B0000; color: white; border-color: #5a0000; }
+  .btn-danger:hover { background: #5a0000; }
+  .content { flex: 1; overflow-y: auto; padding: 16px 20px; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* ── Stat grid ── */
+  .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin-bottom: 16px; border: 1px solid var(--border); border-right: none; }
+  .stat-card { background: white; padding: 12px 14px; border-right: 1px solid var(--border); }
+  .stat-card.accent { background: var(--red); }
+  .stat-card.accent .stat-label { color: rgba(255,255,255,0.8); }
+  .stat-card.accent .stat-value { color: white; }
+  .stat-card.accent .stat-change { color: rgba(255,255,255,0.7); }
+  .stat-label { font-size: 10px; color: var(--gray-dark); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; }
+  .stat-value { font-size: 22px; font-weight: bold; color: var(--black); line-height: 1; margin-bottom: 3px; }
+  .stat-change { font-size: 10px; color: var(--gray-dark); }
+
+  /* ── Table card ── */
+  .table-card { background: white; border: 1px solid var(--border); margin-bottom: 16px; }
+  .table-header { padding: 7px 12px; border-bottom: 2px solid var(--black); background: var(--gray-light); display: flex; align-items: center; gap: 10px; }
+  .table-title { font-size: 12px; font-weight: bold; color: var(--black); text-transform: uppercase; letter-spacing: 0.04em; }
+  .table-count { font-size: 11px; color: var(--gray-dark); background: var(--gray-mid); padding: 1px 6px; }
+  .search-input { margin-left: auto; padding: 4px 8px; border: 1px solid var(--border); font-size: 12px; font-family: var(--font); color: var(--black); background: white; outline: none; width: 160px; }
+  .search-input:focus { border-color: var(--red); }
+  table { width: 100%; border-collapse: collapse; }
+  thead tr { background: var(--gray-light); border-bottom: 2px solid var(--gray-mid); }
+  th { padding: 6px 10px; text-align: left; font-size: 11px; color: var(--black); text-transform: uppercase; letter-spacing: 0.04em; font-weight: bold; border-right: 1px solid var(--gray-mid); }
+  th:last-child { border-right: none; }
+  td { padding: 6px 10px; font-size: 12px; color: var(--black); border-bottom: 1px solid var(--gray-mid); border-right: 1px solid var(--gray-mid); }
+  td:last-child { border-right: none; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #FFF5F5; }
+  .badge { display: inline-block; padding: 1px 6px; font-size: 10px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.03em; }
+  .badge-green { background: #E2EFDA; color: #375623; }
+  .badge-amber { background: #FFF2CC; color: #7D6608; }
+  .badge-red { background: var(--red-light); color: var(--red-dark); }
+  .badge-gray { background: var(--gray-mid); color: var(--gray-dark); }
+
+  /* ── Order cards ── */
+  .order-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; margin-bottom: 16px; border: 1px solid var(--border); border-right: none; border-bottom: none; }
+  .order-card { background: white; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 12px; cursor: pointer; }
+  .order-card:hover { background: #FFF5F5; }
+  .order-card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; }
+  .order-customer { font-size: 12px; font-weight: bold; color: var(--black); }
+  .order-time { font-size: 10px; color: var(--gray-dark); margin-top: 1px; }
+  .order-footer { display: flex; align-items: center; justify-content: space-between; padding-top: 8px; border-top: 1px solid var(--gray-mid); }
+  .order-total { font-size: 13px; font-weight: bold; color: var(--black); }
+  .empty-state { padding: 32px; text-align: center; color: var(--gray-dark); font-size: 12px; font-style: italic; }
+
+  /* ── Modal ── */
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 100; align-items: center; justify-content: center; }
+  .modal-overlay.open { display: flex; }
+  .modal { background: white; width: 480px; max-height: 85vh; overflow-y: auto; border: 2px solid var(--black); box-shadow: 4px 4px 0 rgba(0,0,0,0.3); }
+  .modal-head { padding: 10px 14px; background: var(--red); display: flex; align-items: center; justify-content: space-between; }
+  .modal-title { font-size: 13px; font-weight: bold; color: white; text-transform: uppercase; letter-spacing: 0.04em; }
+  .modal-close { width: 22px; height: 22px; border: 1px solid rgba(255,255,255,0.5); background: transparent; cursor: pointer; font-size: 12px; color: white; font-weight: bold; display: flex; align-items: center; justify-content: center; }
+  .modal-close:hover { background: rgba(255,255,255,0.15); }
+  .modal-body { padding: 16px 14px; }
+  .form-group { margin-bottom: 12px; }
+  .form-label { display: block; font-size: 11px; color: var(--black); text-transform: uppercase; letter-spacing: 0.04em; font-weight: bold; margin-bottom: 4px; }
+  .form-input, .form-select { width: 100%; padding: 5px 8px; border: 1px solid var(--border); font-size: 12px; font-family: var(--font); color: var(--black); background: white; outline: none; }
+  .form-input:focus, .form-select:focus { border-color: var(--red); }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .form-divider { border: none; border-top: 2px dashed var(--gray-mid); margin: 14px 0 10px; }
+  .modal-footer { padding: 10px 14px; display: flex; justify-content: flex-end; gap: 8px; border-top: 2px solid var(--gray-mid); background: var(--gray-light); }
+  .form-error { font-size: 11px; color: var(--red-dark); font-weight: bold; display: none; margin-top: 4px; }
+
+  /* ── Misc ── */
+  .cut-yes { color: var(--red); font-weight: bold; font-size: 13px; display: inline-block; width: 20px; text-align: center; }
+  .cut-no { color: var(--gray-mid); font-size: 13px; display: inline-block; width: 20px; text-align: center; }
+  .filter-row { display: flex; align-items: center; margin-bottom: 12px; border: 1px solid var(--border); width: fit-content; }
+  .filter-chip { padding: 4px 12px; font-size: 11px; font-weight: bold; border-right: 1px solid var(--border); background: var(--gray-light); cursor: pointer; color: var(--gray-dark); text-transform: uppercase; letter-spacing: 0.03em; }
+  .filter-chip:last-child { border-right: none; }
+  .filter-chip.active { background: var(--red); color: white; }
+  .filter-chip:hover:not(.active) { background: var(--gray-mid); }
+  td.mono { font-family: Courier New, monospace; }
+  .price-input { width: 70px; padding: 3px 6px; border: 1px solid var(--border); font-size: 12px; font-family: Courier New, monospace; background: #FFFFF0; }
+  .price-input:focus { border-color: var(--red); outline: none; }
+  .action-btn { padding: 3px 8px; border: 1px solid var(--border); background: var(--gray-light); font-size: 11px; font-family: var(--font); cursor: pointer; color: var(--black); font-weight: bold; text-transform: uppercase; }
+  .action-btn:hover { background: var(--red); color: white; border-color: var(--red-dark); }
+  .section-bar { background: var(--black); color: white; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.05em; padding: 5px 12px; }
+  .tabs { display: flex; margin-bottom: 14px; border: 1px solid var(--border); width: fit-content; }
+  .tab { padding: 5px 14px; font-size: 12px; font-weight: bold; cursor: pointer; color: var(--gray-dark); background: var(--gray-light); border-right: 1px solid var(--border); user-select: none; text-transform: uppercase; letter-spacing: 0.03em; }
+  .tab:last-child { border-right: none; }
+  .tab.active { background: white; color: var(--red); border-bottom: 2px solid var(--red); }
+  .tab:hover:not(.active) { background: var(--gray-mid); }
+
+  /* ── Order detail modal ── */
+  .detail-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--gray-mid); font-size: 12px; }
+  .detail-row:last-child { border-bottom: none; }
+  .detail-label { color: var(--gray-dark); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login-screen">
+  <div class="login-box">
+    <div class="login-head">
+      <div class="logo-text">SEVEN STAR FOOD LLC</div>
+      <div class="logo-sub">Admin Portal</div>
+    </div>
+    <div class="login-body">
+      <label class="login-label">Username</label>
+      <input class="login-input" id="login-user" type="text" placeholder="admin" onkeydown="if(event.key==='Enter')doLogin()">
+      <label class="login-label">Password</label>
+      <input class="login-input" id="login-pass" type="password" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()">
+      <button class="login-btn" onclick="doLogin()">SIGN IN</button>
+      <div class="login-error" id="login-error"></div>
+    </div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <nav class="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-text">SEVEN STAR FOOD LLC</div>
+      <div class="logo-sub">Admin Portal</div>
+    </div>
+    <div class="sidebar-section">Operations</div>
+    <div class="nav-item active" onclick="showPanel('orders',this)">&#9632; Orders</div>
+    <div class="nav-item" onclick="showPanel('packing',this)">&#9632; Packing Report</div>
+    <div class="sidebar-section">Catalog</div>
+    <div class="nav-item" onclick="showPanel('products',this)">&#9632; Products</div>
+    <div class="nav-item" onclick="showPanel('salmon',this)">&#9632; Salmon Cuts</div>
+    <div class="nav-item" onclick="showPanel('inventory',this)">&#9632; Inventory</div>
+    <div class="sidebar-section">Accounts</div>
+    <div class="nav-item" onclick="showPanel('customers',this)">&#9632; Customers</div>
+    <div class="sidebar-footer">
+      <div class="user-name" id="sidebar-user">admin</div>
+      <div style="margin-top:2px;">Seven Star Food &nbsp;|&nbsp; <span style="cursor:pointer;color:#888;" onclick="logout()">Sign out</span></div>
+    </div>
+  </nav>
+
+  <div class="main">
+    <div class="topbar">
+      <div class="page-title" id="page-title">Orders</div>
+      <div style="width:1px;height:20px;background:var(--gray-mid);margin:0 4px;"></div>
+      <div style="font-size:11px;color:var(--gray-dark);" id="topbar-date"></div>
+      <div class="topbar-right">
+        <button class="btn btn-primary" id="topbar-btn" onclick="handleTopbarBtn()">+ NEW ORDER</button>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- ORDERS -->
+      <div class="panel active" id="panel-orders">
+        <div class="stat-grid">
+          <div class="stat-card accent">
+            <div class="stat-label">Today's Orders</div>
+            <div class="stat-value" id="stat-today">—</div>
+            <div class="stat-change">Delivery today</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">3-Day Orders</div>
+            <div class="stat-value" id="stat-total">—</div>
+            <div class="stat-change">Rolling window</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Revenue (3 days)</div>
+            <div class="stat-value" id="stat-revenue">—</div>
+            <div class="stat-change">Sum of order totals</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Active Customers</div>
+            <div class="stat-value" id="stat-customers">—</div>
+            <div class="stat-change">Total accounts</div>
+          </div>
+        </div>
+        <div class="order-grid" id="order-grid">
+          <div class="empty-state" style="grid-column:1/-1;border:1px solid var(--border);">Loading orders...</div>
+        </div>
+      </div>
+
+      <!-- PACKING REPORT -->
+      <div class="panel" id="panel-packing">
+        <div style="display:flex;gap:10px;margin-bottom:14px;align-items:flex-end;">
+          <div>
+            <div style="font-size:11px;font-weight:bold;text-transform:uppercase;margin-bottom:4px;">Delivery Date</div>
+            <input type="date" class="form-input" id="packing-date" style="width:150px;">
+          </div>
+          <button class="btn btn-primary" onclick="loadPackingReport()">GENERATE REPORT</button>
+        </div>
+        <div id="packing-content">
+          <div class="empty-state">Select a date and click Generate Report.</div>
+        </div>
+      </div>
+
+      <!-- PRODUCTS -->
+      <div class="panel" id="panel-products">
+        <div class="table-card">
+          <div class="table-header">
+            <div class="table-title">Product Catalog</div>
+            <div class="table-count" id="product-count">— items</div>
+            <input class="search-input" placeholder="Search..." oninput="renderProducts(this.value)">
+          </div>
+          <table>
+            <thead><tr><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Status</th></tr></thead>
+            <tbody id="product-body">
+              <tr><td colspan="7" class="empty-state">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- SALMON CUTS -->
+      <div class="panel" id="panel-salmon">
+        <p style="font-size:12px;color:var(--gray-dark);margin-bottom:12px;line-height:1.6;">Per-customer salmon cutting specs. Applied automatically to daily packing reports.</p>
+        <div class="table-card">
+          <div class="table-header">
+            <div class="table-title">Salmon Cut Preferences</div>
+            <div class="table-count" id="cut-count">— customers</div>
+            <input class="search-input" placeholder="Search customer..." oninput="renderSalmonCuts(this.value)">
+          </div>
+          <table>
+            <thead><tr><th>Customer</th><th>Cut Type</th><th style="text-align:center;">Skin Off</th><th style="text-align:center;">Scale</th><th style="text-align:center;">PBO H&G</th></tr></thead>
+            <tbody id="cut-body">
+              <tr><td colspan="5" class="empty-state">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- INVENTORY -->
+      <div class="panel" id="panel-inventory">
+        <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);" id="inv-stats">
+          <div class="stat-card"><div class="stat-label">Total SKUs</div><div class="stat-value" id="inv-total">—</div></div>
+          <div class="stat-card accent"><div class="stat-label">Out of Stock</div><div class="stat-value" id="inv-oos">—</div></div>
+          <div class="stat-card"><div class="stat-label">Low Stock</div><div class="stat-value" id="inv-low">—</div></div>
+        </div>
+        <div class="table-card">
+          <div class="table-header"><div class="table-title">Inventory Levels</div></div>
+          <table>
+            <thead><tr><th>SKU</th><th>Product</th><th>Unit</th><th>Qty on Hand</th><th>Reorder Pt</th><th>Status</th></tr></thead>
+            <tbody id="inventory-body">
+              <tr><td colspan="6" class="empty-state">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- CUSTOMERS -->
+      <div class="panel" id="panel-customers">
+        <div class="table-card">
+          <div class="table-header">
+            <div class="table-title">Customer Accounts</div>
+            <div class="table-count" id="customer-count">— active</div>
+            <input class="search-input" placeholder="Search customers..." oninput="renderCustomers(this.value)">
+          </div>
+          <table>
+            <thead><tr><th>Company</th><th>Contact</th><th>Phone</th><th>Language</th><th>Status</th></tr></thead>
+            <tbody id="customer-body">
+              <tr><td colspan="5" class="empty-state">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: New Order -->
+<div class="modal-overlay" id="modal-order">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title">Manual Order Entry</div>
+      <button class="modal-close" onclick="closeModal('modal-order')">X</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Customer</label>
+        <select class="form-select" id="no-customer"></select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Delivery Date</label>
+        <input class="form-input" type="date" id="no-date">
+      </div>
+      <div style="font-size:11px;font-weight:bold;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px;">Order Items</div>
+      <div id="no-items-list" style="display:flex;flex-direction:column;gap:6px;"></div>
+      <button class="btn btn-outline" style="width:100%;margin-top:8px;font-size:11px;" onclick="addOrderItemRow()">+ ADD ITEM</button>
+      <div class="form-group" style="margin-top:12px;">
+        <label class="form-label">Notes</label>
+        <input class="form-input" id="no-notes" placeholder="e.g. D-Trim, Skin Off">
+      </div>
+      <div class="form-error" id="no-error"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-order')">CANCEL</button>
+      <button class="btn btn-primary" onclick="submitOrder()">SUBMIT ORDER</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: New Customer -->
+<div class="modal-overlay" id="modal-customer">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title">New Customer</div>
+      <button class="modal-close" onclick="closeModal('modal-customer')">X</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">First Name</label><input class="form-input" id="nc-first" placeholder="First name"></div>
+        <div class="form-group"><label class="form-label">Last Name</label><input class="form-input" id="nc-last" placeholder="Last name"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Company Name *</label><input class="form-input" id="nc-company" placeholder="Restaurant / company name"></div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Phone</label><input class="form-input" id="nc-phone" placeholder="206-000-0000"></div>
+        <div class="form-group"><label class="form-label">Email</label><input class="form-input" id="nc-email" placeholder="email@restaurant.com"></div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Language Preference</label>
+        <select class="form-select" id="nc-lang"><option>English</option><option>Korean</option><option>Chinese</option><option>Japanese</option><option>Vietnamese</option></select>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Salmon Cut</label>
+          <select class="form-select" id="nc-cut"><option value="">N/A</option><option>D-Trim</option><option>Half</option><option>Half-Cut</option><option>Bags</option></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Skin Off?</label>
+          <select class="form-select" id="nc-skinoff"><option value="false">No</option><option value="true">Yes</option></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Scale?</label>
+          <select class="form-select" id="nc-scale"><option value="false">No</option><option value="true">Yes</option></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">PBO H&G?</label>
+          <select class="form-select" id="nc-pbohg"><option value="false">No</option><option value="true">Yes</option></select>
+        </div>
+      </div>
+      <div class="form-group"><label class="form-label">Notes</label><input class="form-input" id="nc-notes" placeholder="Delivery or special order notes..."></div>
+      <div class="form-error" id="nc-error"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-customer')">CANCEL</button>
+      <button class="btn btn-primary" onclick="submitCustomer()">CREATE CUSTOMER</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Order Detail -->
+<div class="modal-overlay" id="modal-order-detail">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title" id="detail-title">Order Detail</div>
+      <button class="modal-close" onclick="closeModal('modal-order-detail')">X</button>
+    </div>
+    <div class="modal-body" id="detail-body">Loading...</div>
+  </div>
+</div>
+
+<script>
+let token = localStorage.getItem('ss_token');
+let allProducts = [], allCustomers = [], allOrders = [];
+
+/* ── Auth ── */
+async function doLogin() {
+  const username = document.getElementById('login-user').value.trim();
+  const password = document.getElementById('login-pass').value;
+  const errEl = document.getElementById('login-error');
+  if (!username || !password) { showErr(errEl, 'Enter username and password'); return; }
+
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+    const data = await res.json();
+    if (data.token) {
+      token = data.token;
+      localStorage.setItem('ss_token', token);
+      localStorage.setItem('ss_user', username);
+      startApp();
+    } else {
+      showErr(errEl, data.error || 'Login failed');
+    }
+  } catch(e) {
+    showErr(errEl, 'Cannot reach server — is it running?');
+  }
+}
+
+function logout() {
+  localStorage.removeItem('ss_token');
+  token = null;
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('login-pass').value = '';
+}
+
+function startApp() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  document.getElementById('sidebar-user').textContent = localStorage.getItem('ss_user') || 'admin';
+  document.getElementById('topbar-date').textContent = new Date().toLocaleDateString('en-US', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+  document.getElementById('packing-date').value = new Date().toISOString().slice(0, 10);
+  loadAll();
+}
+
+/* ── API helper ── */
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      ...(opts.headers || {})
+    }
+  });
+  if (res.status === 401) { logout(); return null; }
+  return res.json();
+}
+
+/* ── Load all data ── */
+async function loadAll() {
+  const [products, customers, orders] = await Promise.all([
+    api('/api/products'),
+    api('/api/customers'),
+    api('/api/orders')
+  ]);
+  allProducts = products || [];
+  allCustomers = customers || [];
+  allOrders = orders || [];
+
+  renderOrders();
+  renderProducts();
+  renderCustomers();
+  renderSalmonCuts();
+  renderInventory();
+  updateStats();
+  populateDropdowns();
+}
+
+/* ── Stats ── */
+function updateStats() {
+  const today = new Date().toISOString().slice(0, 10);
+  const todayOrders = allOrders.filter(o => o.delivery_date && o.delivery_date.slice(0, 10) === today);
+  const revenue = allOrders.reduce((s, o) => s + parseFloat(o.total || 0), 0);
+  document.getElementById('stat-today').textContent = todayOrders.length;
+  document.getElementById('stat-total').textContent = allOrders.length;
+  document.getElementById('stat-revenue').textContent = '$' + revenue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  document.getElementById('stat-customers').textContent = allCustomers.length;
+}
+
+/* ── Orders ── */
+function renderOrders() {
+  const grid = document.getElementById('order-grid');
+  if (!allOrders.length) {
+    grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;border:1px solid var(--border);">No orders in the last 3 days.</div>';
+    return;
+  }
+  grid.innerHTML = allOrders.map(o => {
+    const customer = o.company_name || [o.first_name, o.last_name].filter(Boolean).join(' ') || 'Unknown';
+    const placedAt = o.order_placed_at ? new Date(o.order_placed_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }) : '—';
+    const delivDate = o.delivery_date ? o.delivery_date.slice(0, 10) : '—';
+    const total = o.total ? '$' + parseFloat(o.total).toFixed(2) : '—';
+    return `
+      <div class="order-card" onclick="viewOrder(${o.id})">
+        <div class="order-card-top">
+          <div>
+            <div class="order-customer">${customer}</div>
+            <div class="order-time">Delivery: ${delivDate} &nbsp;|&nbsp; Placed: ${placedAt}</div>
+          </div>
+        </div>
+        <div class="order-footer">
+          <span class="order-total">${total}</span>
+          <button class="action-btn">VIEW &rarr;</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function viewOrder(id) {
+  openModal('modal-order-detail');
+  document.getElementById('detail-body').innerHTML = 'Loading...';
+  const order = await api(`/api/orders/${id}`);
+  if (!order) return;
+  const customer = order.company_name || [order.first_name, order.last_name].filter(Boolean).join(' ') || 'Unknown';
+  const items = (order.items || []).map(it =>
+    `<tr><td>${it.description || it.sku}</td><td class="mono">${it.quantity} ${it.unit}</td><td class="mono">${it.unit_price ? '$'+parseFloat(it.unit_price).toFixed(2) : '—'}</td><td>${it.notes || ''}</td></tr>`
+  ).join('');
+  document.getElementById('detail-title').textContent = `Order #${order.id} — ${customer}`;
+  document.getElementById('detail-body').innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">
+      <div><div class="detail-label">Customer</div><div>${customer}</div></div>
+      <div><div class="detail-label">Delivery Date</div><div>${order.delivery_date ? order.delivery_date.slice(0,10) : '—'}</div></div>
+      <div><div class="detail-label">Total</div><div style="font-weight:bold;">${order.total ? '$'+parseFloat(order.total).toFixed(2) : '—'}</div></div>
+      <div><div class="detail-label">Notes</div><div>${order.notes || '—'}</div></div>
+    </div>
+    ${order.salmon_cut ? `<div style="background:var(--red-light);padding:8px 10px;margin-bottom:12px;font-size:11px;"><strong>Salmon Spec:</strong> ${order.salmon_cut}${order.skin_off?' · Skin Off':''}${order.scale?' · Scale':''}${order.pbo_hg?' · PBO H&G':''}</div>` : ''}
+    <table style="margin-top:4px;">
+      <thead><tr><th>Product</th><th>Qty</th><th>Unit Price</th><th>Notes</th></tr></thead>
+      <tbody>${items || '<tr><td colspan="4" class="empty-state">No line items</td></tr>'}</tbody>
+    </table>`;
+}
+
+/* ── Products ── */
+function renderProducts(q = '') {
+  const list = q ? allProducts.filter(p =>
+    p.description.toLowerCase().includes(q.toLowerCase()) ||
+    p.sku.toLowerCase().includes(q.toLowerCase())
+  ) : allProducts;
+  document.getElementById('product-count').textContent = list.length + ' items';
+  document.getElementById('product-body').innerHTML = list.length ? list.map(p => {
+    const status = !p.active ? '<span class="badge badge-gray">INACTIVE</span>'
+      : p.quantity_on_hand <= 0 ? '<span class="badge badge-red">OUT OF STOCK</span>'
+      : p.reorder_point && p.quantity_on_hand <= p.reorder_point ? '<span class="badge badge-amber">LOW</span>'
+      : '<span class="badge badge-green">ACTIVE</span>';
+    const price = p.show_price ? '$'+parseFloat(p.price||0).toFixed(2) : '<span style="color:var(--gray-dark);font-style:italic;">Market</span>';
+    return `<tr>
+      <td class="mono" style="font-size:11px;">${p.sku}</td>
+      <td>${p.description}</td>
+      <td class="mono">${p.unit}</td>
+      <td class="mono">${p.cost ? '$'+parseFloat(p.cost).toFixed(2) : '—'}</td>
+      <td class="mono">${price}</td>
+      <td class="mono">${p.quantity_on_hand ?? '—'}</td>
+      <td>${status}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="7" class="empty-state">No products found.</td></tr>';
+}
+
+/* ── Customers ── */
+function renderCustomers(q = '') {
+  const list = q ? allCustomers.filter(c =>
+    c.company_name.toLowerCase().includes(q.toLowerCase()) ||
+    (c.first_name||'').toLowerCase().includes(q.toLowerCase()) ||
+    (c.last_name||'').toLowerCase().includes(q.toLowerCase())
+  ) : allCustomers;
+  document.getElementById('customer-count').textContent = list.length + ' active';
+  document.getElementById('customer-body').innerHTML = list.length ? list.map(c => {
+    const contact = [c.first_name, c.last_name].filter(Boolean).join(' ') || '—';
+    return `<tr>
+      <td style="font-weight:bold;">${c.company_name}</td>
+      <td style="color:var(--gray-dark);">${contact}</td>
+      <td class="mono" style="font-size:12px;">${c.phone || '—'}</td>
+      <td>${c.language_pref || 'English'}</td>
+      <td><span class="badge badge-green">ACTIVE</span></td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="5" class="empty-state">No customers found.</td></tr>';
+}
+
+/* ── Salmon Cuts ── */
+function renderSalmonCuts(q = '') {
+  const withCuts = allCustomers.filter(c => c.salmon_cut && c.salmon_cut !== 'N/A');
+  const list = q ? withCuts.filter(c => c.company_name.toLowerCase().includes(q.toLowerCase())) : withCuts;
+  document.getElementById('cut-count').textContent = list.length + ' customers';
+  document.getElementById('cut-body').innerHTML = list.length ? list.map(c => `
+    <tr>
+      <td style="font-weight:bold;">${c.company_name}</td>
+      <td><span class="badge badge-gray">${c.salmon_cut}</span></td>
+      <td style="text-align:center;">${c.skin_off ? '<span class="cut-yes">&#10004;</span>' : '<span class="cut-no">—</span>'}</td>
+      <td style="text-align:center;">${c.scale ? '<span class="cut-yes">&#10004;</span>' : '<span class="cut-no">—</span>'}</td>
+      <td style="text-align:center;">${c.pbo_hg ? '<span class="cut-yes">&#10004;</span>' : '<span class="cut-no">—</span>'}</td>
+    </tr>`).join('') : '<tr><td colspan="5" class="empty-state">No salmon cut preferences on file.</td></tr>';
+}
+
+/* ── Inventory ── */
+function renderInventory() {
+  const oos = allProducts.filter(p => p.active && p.quantity_on_hand <= 0);
+  const low = allProducts.filter(p => p.active && p.quantity_on_hand > 0 && p.reorder_point && p.quantity_on_hand <= p.reorder_point);
+  document.getElementById('inv-total').textContent = allProducts.filter(p => p.active).length;
+  document.getElementById('inv-oos').textContent = oos.length;
+  document.getElementById('inv-low').textContent = low.length;
+  document.getElementById('inventory-body').innerHTML = allProducts.filter(p => p.active).map(p => {
+    const status = p.quantity_on_hand <= 0 ? '<span class="badge badge-red">OUT OF STOCK</span>'
+      : p.reorder_point && p.quantity_on_hand <= p.reorder_point ? '<span class="badge badge-amber">LOW</span>'
+      : '<span class="badge badge-green">IN STOCK</span>';
+    return `<tr>
+      <td class="mono" style="font-size:11px;">${p.sku}</td>
+      <td>${p.description}</td>
+      <td class="mono">${p.unit}</td>
+      <td class="mono">${p.quantity_on_hand ?? 0}</td>
+      <td class="mono">${p.reorder_point ?? '—'}</td>
+      <td>${status}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="6" class="empty-state">No products.</td></tr>';
+}
+
+/* ── Packing Report ── */
+async function loadPackingReport() {
+  const date = document.getElementById('packing-date').value;
+  if (!date) return;
+  const orders = await api(`/api/orders?date=${date}`);
+  const content = document.getElementById('packing-content');
+  if (!orders || !orders.length) {
+    content.innerHTML = `<div class="empty-state">No orders for ${date}.</div>`;
+    return;
+  }
+  // Fetch all order details in parallel
+  const details = await Promise.all(orders.map(o => api(`/api/orders/${o.id}`)));
+  const rows = [];
+  for (const order of details) {
+    const customer = order.company_name || [order.first_name, order.last_name].filter(Boolean).join(' ') || 'Unknown';
+    const salmonSpec = [order.salmon_cut, order.skin_off && 'Skin Off', order.scale && 'Scale', order.pbo_hg && 'PBO H&G'].filter(Boolean).join(', ');
+    for (const item of (order.items || [])) {
+      rows.push(`<tr>
+        <td>${item.description || item.sku}</td>
+        <td style="font-weight:bold;">${customer}</td>
+        <td class="mono">${item.quantity} ${item.unit}</td>
+        <td>${salmonSpec || '—'}</td>
+        <td>${item.notes || order.notes || ''}</td>
+      </tr>`);
+    }
+  }
+  content.innerHTML = `
+    <div class="section-bar">Order Items — ${date}</div>
+    <div class="table-card" style="margin-top:0;border-top:none;">
+      <table>
+        <thead><tr><th>Product</th><th>Customer</th><th>Qty / Unit</th><th>Cut Spec</th><th>Notes</th></tr></thead>
+        <tbody>${rows.join('') || '<tr><td colspan="5" class="empty-state">No items</td></tr>'}</tbody>
+      </table>
+    </div>`;
+}
+
+/* ── New Order modal ── */
+function populateDropdowns() {
+  const custSel = document.getElementById('no-customer');
+  custSel.innerHTML = allCustomers.map(c => `<option value="${c.id}">${c.company_name}</option>`).join('');
+  document.getElementById('no-date').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('no-items-list').innerHTML = '';
+  addOrderItemRow();
+}
+
+function addOrderItemRow() {
+  const list = document.getElementById('no-items-list');
+  const div = document.createElement('div');
+  div.style.cssText = 'display:grid;grid-template-columns:2fr 80px 70px 80px;gap:6px;align-items:center;';
+  const productOptions = allProducts.map(p => `<option value="${p.id}" data-price="${p.price||0}" data-unit="${p.unit}">${p.description}</option>`).join('');
+  div.innerHTML = `
+    <select class="form-select" onchange="syncUnit(this)">${productOptions}</select>
+    <input class="form-input" placeholder="Qty" type="number" value="1" min="0.01" step="0.01">
+    <select class="form-select"><option>lb</option><option>ea</option><option>CA</option><option>kg</option></select>
+    <input class="form-input price-input" placeholder="Price" type="number" step="0.01">`;
+  list.appendChild(div);
+}
+
+function syncUnit(sel) {
+  const row = sel.closest('div');
+  const unitSel = row.querySelectorAll('select')[1];
+  const priceInput = row.querySelector('.price-input');
+  const unit = sel.options[sel.selectedIndex].dataset.unit;
+  const price = sel.options[sel.selectedIndex].dataset.price;
+  if (unit) { for (let i=0; i<unitSel.options.length; i++) { if (unitSel.options[i].value===unit) { unitSel.selectedIndex=i; break; } } }
+  if (price) priceInput.value = parseFloat(price).toFixed(2);
+}
+
+async function submitOrder() {
+  const errEl = document.getElementById('no-error');
+  const customer_id = document.getElementById('no-customer').value;
+  const delivery_date = document.getElementById('no-date').value;
+  const notes = document.getElementById('no-notes').value;
+  if (!delivery_date) { showErr(errEl, 'Delivery date is required'); return; }
+
+  const rows = document.getElementById('no-items-list').querySelectorAll('div');
+  const items = Array.from(rows).map(row => {
+    const sels = row.querySelectorAll('select');
+    const inputs = row.querySelectorAll('input');
+    return {
+      product_id: parseInt(sels[0].value),
+      quantity: parseFloat(inputs[0].value) || 0,
+      unit: sels[1].value,
+      unit_price: parseFloat(inputs[1].value) || 0,
+    };
+  }).filter(it => it.quantity > 0);
+
+  if (!items.length) { showErr(errEl, 'Add at least one item with a quantity'); return; }
+
+  const res = await api('/api/orders', {
+    method: 'POST',
+    body: JSON.stringify({ customer_id: parseInt(customer_id), delivery_date, notes, items })
+  });
+  if (res && res.id) {
+    closeModal('modal-order');
+    allOrders = await api('/api/orders') || allOrders;
+    renderOrders();
+    updateStats();
+  } else {
+    showErr(errEl, (res && res.error) || 'Failed to create order');
+  }
+}
+
+/* ── New Customer modal ── */
+async function submitCustomer() {
+  const errEl = document.getElementById('nc-error');
+  const company_name = document.getElementById('nc-company').value.trim();
+  if (!company_name) { showErr(errEl, 'Company name is required'); return; }
+
+  const body = {
+    company_name,
+    first_name: document.getElementById('nc-first').value.trim() || null,
+    last_name: document.getElementById('nc-last').value.trim() || null,
+    phone: document.getElementById('nc-phone').value.trim() || null,
+    email: document.getElementById('nc-email').value.trim() || null,
+    language_pref: document.getElementById('nc-lang').value,
+    salmon_cut: document.getElementById('nc-cut').value || null,
+    skin_off: document.getElementById('nc-skinoff').value === 'true',
+    scale: document.getElementById('nc-scale').value === 'true',
+    pbo_hg: document.getElementById('nc-pbohg').value === 'true',
+    notes: document.getElementById('nc-notes').value.trim() || null,
+  };
+
+  const res = await api('/api/customers', { method: 'POST', body: JSON.stringify(body) });
+  if (res && res.id) {
+    closeModal('modal-customer');
+    allCustomers = await api('/api/customers') || allCustomers;
+    renderCustomers();
+    renderSalmonCuts();
+    updateStats();
+    populateDropdowns();
+    ['nc-first','nc-last','nc-company','nc-phone','nc-email','nc-notes'].forEach(id => document.getElementById(id).value = '');
+  } else {
+    showErr(errEl, (res && res.error) || 'Failed to create customer');
+  }
+}
+
+/* ── Navigation ── */
+const panelTitles = { orders:'Orders', packing:'Packing Report', products:'Products', salmon:'Salmon Cuts', inventory:'Inventory', customers:'Customers' };
+const panelBtns   = { orders:'+ NEW ORDER', packing:'GENERATE REPORT', products:'+ ADD PRODUCT', salmon:'', inventory:'', customers:'+ NEW CUSTOMER' };
+
+function showPanel(name, el) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+  el.classList.add('active');
+  document.getElementById('page-title').textContent = panelTitles[name] || name;
+  const btn = document.getElementById('topbar-btn');
+  btn.textContent = panelBtns[name] || '';
+  btn.style.display = panelBtns[name] ? '' : 'none';
+}
+
+function handleTopbarBtn() {
+  const title = document.getElementById('page-title').textContent;
+  if (title === 'Orders') openModal('modal-order');
+  else if (title === 'Customers') openModal('modal-customer');
+  else if (title === 'Packing Report') loadPackingReport();
+}
+
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+document.querySelectorAll('.modal-overlay').forEach(m => {
+  m.addEventListener('click', function(e) { if (e.target === this) this.classList.remove('open'); });
+});
+
+function showErr(el, msg) { el.textContent = msg; el.style.display = 'block'; }
+
+/* ── Init ── */
+if (token) {
+  startApp();
+} else {
+  document.getElementById('login-screen').style.display = 'flex';
+}
+</script>
+</body>
+</html>

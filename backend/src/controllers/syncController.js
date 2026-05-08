@@ -24,11 +24,12 @@ async function upsertItems(items) {
   for (const item of items) {
     if (item.Type === 'Category' || item.Type === 'Group') continue;
     await pool.query(
-      `INSERT INTO products (qb_item_id, sku, description, price, cost, active, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW())
+      `INSERT INTO products (qb_item_id, sku, description, unit, price, cost, active, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
        ON CONFLICT (qb_item_id) DO UPDATE
          SET sku         = EXCLUDED.sku,
              description = EXCLUDED.description,
+             unit        = EXCLUDED.unit,
              price       = EXCLUDED.price,
              cost        = EXCLUDED.cost,
              active      = EXCLUDED.active,
@@ -37,6 +38,7 @@ async function upsertItems(items) {
         item.Id,
         item.Name,
         item.Description || item.Name,
+        item.UnitOfMeasure || 'ea',
         item.UnitPrice || 0,
         item.PurchaseCost || 0,
         item.Active !== false,
