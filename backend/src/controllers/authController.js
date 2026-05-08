@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const OAuthClient = require('intuit-oauth');
 const pool = require('../config/db');
 const { oauthClient, saveTokens } = require('../config/quickbooks');
 
@@ -36,7 +37,8 @@ function startQBOAuth(req, res) {
 
 async function qbOAuthCallback(req, res) {
   try {
-    const authResponse = await oauthClient.createToken(req.url);
+    const fullUrl = process.env.QB_REDIRECT_URI + req.url.substring(req.url.indexOf('?'));
+    const authResponse = await oauthClient.createToken(fullUrl);
     const token = authResponse.getJson();
 
     await saveTokens({
