@@ -212,6 +212,7 @@
       <div style="width:1px;height:20px;background:var(--gray-mid);margin:0 4px;"></div>
       <div style="font-size:11px;color:var(--gray-dark);" id="topbar-date"></div>
       <div class="topbar-right">
+        <button class="btn btn-outline" id="sync-pending-btn" onclick="syncPendingInvoices()" style="display:none;font-size:11px;">&#8635; SYNC PENDING TO QB</button>
         <button class="btn btn-primary" id="topbar-btn" onclick="handleTopbarBtn()">+ NEW ORDER</button>
       </div>
     </div>
@@ -255,6 +256,7 @@
             <input type="date" class="form-input" id="packing-date" style="width:150px;">
           </div>
           <button class="btn btn-primary" onclick="loadPackingReport()">GENERATE REPORT</button>
+          <button class="btn btn-outline" id="export-pdf-btn" onclick="exportPackingPDF()" style="display:none;">&#128438; EXPORT PDF</button>
         </div>
         <div id="packing-content">
           <div class="empty-state">Select a date and click Generate Report.</div>
@@ -508,7 +510,30 @@ async function loadAll() {
   renderSalmonCuts();
   renderInventory();
   updateStats();
+  checkPendingInvoices();
   populateDropdowns();
+}
+
+/* ── Sync pending invoices ── */
+async function syncPendingInvoices() {
+  const btn = document.getElementById('sync-pending-btn');
+  btn.textContent = '⏳ Syncing...';
+  btn.disabled = true;
+  const res = await api('/api/admin/sync-pending-invoices', { method: 'POST' });
+  btn.disabled = false;
+  if (res) {
+    alert(`Sync complete — ${res.synced} pushed to QB, ${res.failed} failed.`);
+    allOrders = await api('/api/orders') || allOrders;
+    renderOrders();
+    checkPendingInvoices();
+  }
+}
+
+function checkPendingInvoices() {
+  const pending = allOrders.filter(o => !o.qb_invoice_id).length;
+  const btn = document.getElementById('sync-pending-btn');
+  btn.style.display = pending > 0 ? '' : 'none';
+  btn.textContent = `↻ SYNC PENDING TO QB (${pending})`;
 }
 
 /* ── Stats ── */
@@ -657,39 +682,144 @@ function renderInventory() {
 }
 
 /* ── Packing Report ── */
+let currentPackingData = null;
+
 async function loadPackingReport() {
   const date = document.getElementById('packing-date').value;
   if (!date) return;
   const orders = await api(`/api/orders?date=${date}`);
   const content = document.getElementById('packing-content');
+  document.getElementById('export-pdf-btn').style.display = 'none';
+  currentPackingData = null;
+
   if (!orders || !orders.length) {
     content.innerHTML = `<div class="empty-state">No orders for ${date}.</div>`;
     return;
   }
-  // Fetch all order details in parallel
+
   const details = await Promise.all(orders.map(o => api(`/api/orders/${o.id}`)));
-  const rows = [];
+
+  // Build flat list of line items with cut specs
+  const allItems = [];
   for (const order of details) {
     const customer = order.company_name || [order.first_name, order.last_name].filter(Boolean).join(' ') || 'Unknown';
-    const salmonSpec = [order.salmon_cut, order.skin_off && 'Skin Off', order.scale && 'Scale', order.pbo_hg && 'PBO H&G'].filter(Boolean).join(', ');
     for (const item of (order.items || [])) {
-      rows.push(`<tr>
-        <td>${item.description || item.sku}</td>
-        <td style="font-weight:bold;">${customer}</td>
-        <td class="mono">${item.quantity} ${item.unit}</td>
-        <td>${salmonSpec || '—'}</td>
-        <td>${item.notes || order.notes || ''}</td>
-      </tr>`);
+      allItems.push({
+        product: item.description || item.sku,
+        customer,
+        quantity: item.quantity,
+        unit: item.unit,
+        cut: order.salmon_cut || '',
+        skin_off: order.skin_off,
+        scale: order.scale,
+        pbo_hg: order.pbo_hg,
+        notes: item.notes || order.notes || '',
+      });
     }
   }
+
+  // Group by product name
+  const byProduct = {};
+  for (const item of allItems) {
+    if (!byProduct[item.product]) byProduct[item.product] = [];
+    byProduct[item.product].push(item);
+  }
+
+  currentPackingData = { date, byProduct };
+
+  const rows = allItems.map(item => {
+    const cutSpec = [item.cut, item.skin_off && 'Skin Off', item.scale && 'Scale', item.pbo_hg && 'PBO H&G'].filter(Boolean).join(' · ') || '—';
+    return `<tr>
+      <td>${item.product}</td>
+      <td style="font-weight:bold;">${item.customer}</td>
+      <td class="mono">${item.quantity} ${item.unit}</td>
+      <td>${cutSpec}</td>
+      <td>${item.notes}</td>
+    </tr>`;
+  });
+
   content.innerHTML = `
-    <div class="section-bar">Order Items — ${date}</div>
+    <div class="section-bar">Packing Sheet — ${date}</div>
     <div class="table-card" style="margin-top:0;border-top:none;">
       <table>
         <thead><tr><th>Product</th><th>Customer</th><th>Qty / Unit</th><th>Cut Spec</th><th>Notes</th></tr></thead>
         <tbody>${rows.join('') || '<tr><td colspan="5" class="empty-state">No items</td></tr>'}</tbody>
       </table>
     </div>`;
+
+  document.getElementById('export-pdf-btn').style.display = '';
+}
+
+function exportPackingPDF() {
+  if (!currentPackingData) return;
+  const { date, byProduct } = currentPackingData;
+
+  const productSections = Object.entries(byProduct).map(([product, items]) => {
+    const rows = items.map(item => {
+      const cutSpec = [item.cut, item.skin_off && 'Skin Off', item.scale && 'Scale', item.pbo_hg && 'PBO H&G'].filter(Boolean).join(' · ') || '—';
+      return `<tr>
+        <td>${item.customer}</td>
+        <td>${item.quantity} ${item.unit}</td>
+        <td><strong>${cutSpec}</strong></td>
+        <td>${item.notes || ''}</td>
+      </tr>`;
+    }).join('');
+    return `
+      <div class="product-block">
+        <div class="product-header">${product}</div>
+        <table>
+          <thead><tr><th>Customer</th><th>Qty / Unit</th><th>Cut Spec</th><th>Notes</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }).join('');
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Packing Sheet — ${date}</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, sans-serif; font-size: 12pt; color: #000; background: white; padding: 20px; }
+  .header { border-bottom: 3px solid #C00000; padding-bottom: 10px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: flex-end; }
+  .header-title { font-size: 18pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.04em; }
+  .header-sub { font-size: 10pt; color: #555; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
+  .header-date { font-size: 14pt; font-weight: bold; color: #C00000; text-align: right; }
+  .product-block { margin-bottom: 20px; page-break-inside: avoid; }
+  .product-header { background: #1A1A1A; color: white; font-size: 13pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.05em; padding: 6px 12px; margin-bottom: 0; }
+  table { width: 100%; border-collapse: collapse; }
+  thead tr { background: #F2F2F2; }
+  th { padding: 6px 10px; text-align: left; font-size: 9pt; text-transform: uppercase; letter-spacing: 0.04em; border: 1px solid #BFBFBF; }
+  td { padding: 7px 10px; font-size: 11pt; border: 1px solid #BFBFBF; vertical-align: top; }
+  tbody tr:nth-child(even) { background: #FAFAFA; }
+  .footer { margin-top: 24px; border-top: 1px solid #BFBFBF; padding-top: 8px; font-size: 9pt; color: #888; display: flex; justify-content: space-between; }
+  @media print {
+    body { padding: 0; }
+    @page { margin: 1.5cm; size: A4 portrait; }
+  }
+</style>
+</head>
+<body>
+<div class="header">
+  <div>
+    <div class="header-title">Seven Star Food LLC</div>
+    <div class="header-sub">Daily Packing Sheet</div>
+  </div>
+  <div class="header-date">Delivery: ${date}</div>
+</div>
+${productSections || '<p style="color:#888;font-style:italic;">No items for this date.</p>'}
+<div class="footer">
+  <span>Seven Star Food LLC — Confidential</span>
+  <span>Printed: ${new Date().toLocaleString()}</span>
+</div>
+<script>window.onload = function() { window.print(); }<\/script>
+</body>
+</html>`;
+
+  const win = window.open('', '_blank');
+  win.document.write(html);
+  win.document.close();
 }
 
 /* ── New Order modal ── */
@@ -810,7 +940,7 @@ function showPanel(name, el) {
 
 function handleTopbarBtn() {
   const title = document.getElementById('page-title').textContent;
-  if (title === 'Orders') openModal('modal-order');
+  if (title === 'Orders') { populateDropdowns(); openModal('modal-order'); }
   else if (title === 'Customers') openModal('modal-customer');
   else if (title === 'Packing Report') loadPackingReport();
 }

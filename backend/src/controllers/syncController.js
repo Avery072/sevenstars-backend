@@ -2,10 +2,18 @@ const pool = require('../config/db');
 const { queryQBAll } = require('../middleware/qbSync');
 
 async function syncFromQB(req, res) {
-  const [items, customers] = await Promise.all([
-    queryQBAll('Item'),
-    queryQBAll('Customer'),
-  ]);
+  let items, customers;
+  try {
+    [items, customers] = await Promise.all([
+      queryQBAll('Item'),
+      queryQBAll('Customer'),
+    ]);
+  } catch (err) {
+    if (err.message && err.message.includes('Refresh token')) {
+      return res.status(401).json({ error: 'QB token expired. Re-authorize at /api/auth/qb' });
+    }
+    throw err;
+  }
 
   const [itemCount, customerCount] = await Promise.all([
     upsertItems(items),
