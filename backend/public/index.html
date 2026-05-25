@@ -200,6 +200,7 @@
     <div class="nav-item" onclick="showPanel('inventory',this)">&#9632; Inventory</div>
     <div class="sidebar-section">Accounts</div>
     <div class="nav-item" onclick="showPanel('customers',this)">&#9632; Customers</div>
+    <div class="nav-item" onclick="showPanel('pending',this)" id="nav-pending">&#9632; Pending Approvals <span class="nav-badge" id="pending-badge" style="display:none;">0</span></div>
     <div class="sidebar-footer">
       <div class="user-name" id="sidebar-user">admin</div>
       <div style="margin-top:2px;">Seven Star Food &nbsp;|&nbsp; <span style="cursor:pointer;color:#888;" onclick="logout()">Sign out</span></div>
@@ -290,7 +291,7 @@
             <input class="search-input" placeholder="Search customer..." oninput="renderSalmonCuts(this.value)">
           </div>
           <table>
-            <thead><tr><th>Customer</th><th>Cut Type</th><th style="text-align:center;">Skin Off</th><th style="text-align:center;">Scale</th><th style="text-align:center;">PBO H&G</th></tr></thead>
+            <thead><tr><th>Customer</th><th>Cut Type</th><th style="text-align:center;">Skin Off</th><th style="text-align:center;">Scale</th><th style="text-align:center;">PBO</th><th style="text-align:center;">H&amp;G</th></tr></thead>
             <tbody id="cut-body">
               <tr><td colspan="5" class="empty-state">Loading...</td></tr>
             </tbody>
@@ -311,6 +312,23 @@
             <thead><tr><th>SKU</th><th>Product</th><th>Unit</th><th>Qty on Hand</th><th>Reorder Pt</th><th>Status</th></tr></thead>
             <tbody id="inventory-body">
               <tr><td colspan="6" class="empty-state">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- PENDING APPROVALS -->
+      <div class="panel" id="panel-pending">
+        <p style="font-size:12px;color:var(--gray-dark);margin-bottom:12px;line-height:1.6;">Customers who signed up via the mobile app and are awaiting approval. Verify they are a legitimate fish reseller before approving.</p>
+        <div class="table-card">
+          <div class="table-header">
+            <div class="table-title">Pending Signups</div>
+            <div class="table-count" id="pending-count">— requests</div>
+          </div>
+          <table>
+            <thead><tr><th>Company</th><th>Contact</th><th>Email</th><th>Phone</th><th>Address</th><th>Requested</th><th>Action</th></tr></thead>
+            <tbody id="pending-body">
+              <tr><td colspan="7" class="empty-state">Loading...</td></tr>
             </tbody>
           </table>
         </div>
@@ -406,9 +424,16 @@
           <select class="form-select" id="nc-scale"><option value="false">No</option><option value="true">Yes</option></select>
         </div>
         <div class="form-group">
-          <label class="form-label">PBO H&G?</label>
-          <select class="form-select" id="nc-pbohg"><option value="false">No</option><option value="true">Yes</option></select>
+          <label class="form-label">PBO?</label>
+          <select class="form-select" id="nc-pbo"><option value="false">No</option><option value="true">Yes</option></select>
         </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">H&amp;G?</label>
+          <select class="form-select" id="nc-hg"><option value="false">No</option><option value="true">Yes</option></select>
+        </div>
+        <div class="form-group"></div>
       </div>
       <div class="form-group"><label class="form-label">Notes</label><input class="form-input" id="nc-notes" placeholder="Delivery or special order notes..."></div>
       <div class="form-error" id="nc-error"></div>
@@ -512,6 +537,7 @@ async function loadAll() {
   updateStats();
   checkPendingInvoices();
   populateDropdowns();
+  loadPending();
 }
 
 /* ── Sync pending invoices ── */
@@ -592,7 +618,7 @@ async function viewOrder(id) {
       <div><div class="detail-label">Total</div><div style="font-weight:bold;">${order.total ? '$'+parseFloat(order.total).toFixed(2) : '—'}</div></div>
       <div><div class="detail-label">Notes</div><div>${order.notes || '—'}</div></div>
     </div>
-    ${order.salmon_cut ? `<div style="background:var(--red-light);padding:8px 10px;margin-bottom:12px;font-size:11px;"><strong>Salmon Spec:</strong> ${order.salmon_cut}${order.skin_off?' · Skin Off':''}${order.scale?' · Scale':''}${order.pbo_hg?' · PBO H&G':''}</div>` : ''}
+    ${order.salmon_cut ? `<div style="background:var(--red-light);padding:8px 10px;margin-bottom:12px;font-size:11px;"><strong>Salmon Spec:</strong> ${order.salmon_cut}${order.skin_off?' · Skin Off':''}${order.scale?' · Scale':''}${order.pbo?' · PBO':''}${order.hg?' · H&G':''}</div>` : ''}
     <table style="margin-top:4px;">
       <thead><tr><th>Product</th><th>Qty</th><th>Unit Price</th><th>Notes</th></tr></thead>
       <tbody>${items || '<tr><td colspan="4" class="empty-state">No line items</td></tr>'}</tbody>
@@ -649,14 +675,16 @@ function renderSalmonCuts(q = '') {
   const withCuts = allCustomers.filter(c => c.salmon_cut && c.salmon_cut !== 'N/A');
   const list = q ? withCuts.filter(c => c.company_name.toLowerCase().includes(q.toLowerCase())) : withCuts;
   document.getElementById('cut-count').textContent = list.length + ' customers';
+  const ck = (v) => v ? '<span class="cut-yes">&#10004;</span>' : '<span class="cut-no">—</span>';
   document.getElementById('cut-body').innerHTML = list.length ? list.map(c => `
     <tr>
       <td style="font-weight:bold;">${c.company_name}</td>
       <td><span class="badge badge-gray">${c.salmon_cut}</span></td>
-      <td style="text-align:center;">${c.skin_off ? '<span class="cut-yes">&#10004;</span>' : '<span class="cut-no">—</span>'}</td>
-      <td style="text-align:center;">${c.scale ? '<span class="cut-yes">&#10004;</span>' : '<span class="cut-no">—</span>'}</td>
-      <td style="text-align:center;">${c.pbo_hg ? '<span class="cut-yes">&#10004;</span>' : '<span class="cut-no">—</span>'}</td>
-    </tr>`).join('') : '<tr><td colspan="5" class="empty-state">No salmon cut preferences on file.</td></tr>';
+      <td style="text-align:center;">${ck(c.skin_off)}</td>
+      <td style="text-align:center;">${ck(c.scale)}</td>
+      <td style="text-align:center;">${ck(c.pbo)}</td>
+      <td style="text-align:center;">${ck(c.hg)}</td>
+    </tr>`).join('') : '<tr><td colspan="6" class="empty-state">No salmon cut preferences on file.</td></tr>';
 }
 
 /* ── Inventory ── */
@@ -684,6 +712,10 @@ function renderInventory() {
 /* ── Packing Report ── */
 let currentPackingData = null;
 
+function isSalmon(desc) {
+  return (desc || '').toLowerCase().includes('salmon');
+}
+
 async function loadPackingReport() {
   const date = document.getElementById('packing-date').value;
   if (!date) return;
@@ -699,80 +731,157 @@ async function loadPackingReport() {
 
   const details = await Promise.all(orders.map(o => api(`/api/orders/${o.id}`)));
 
-  // Build flat list of line items with cut specs
-  const allItems = [];
+  const salmonItems = [];
+  const otherItems  = [];
+
   for (const order of details) {
     const customer = order.company_name || [order.first_name, order.last_name].filter(Boolean).join(' ') || 'Unknown';
     for (const item of (order.items || [])) {
-      allItems.push({
-        product: item.description || item.sku,
-        customer,
+      const product = item.description || item.sku;
+      const base = {
+        product, customer,
         quantity: item.quantity,
         unit: item.unit,
-        cut: order.salmon_cut || '',
-        skin_off: order.skin_off,
-        scale: order.scale,
-        pbo_hg: order.pbo_hg,
         notes: item.notes || order.notes || '',
-      });
+      };
+      if (isSalmon(product)) {
+        salmonItems.push({ ...base,
+          cut: order.salmon_cut || '',
+          skin_off: order.skin_off,
+          scale: order.scale,
+          pbo: order.pbo,
+          hg: order.hg,
+        });
+      } else {
+        otherItems.push(base);
+      }
     }
   }
 
-  // Group by product name
-  const byProduct = {};
-  for (const item of allItems) {
-    if (!byProduct[item.product]) byProduct[item.product] = [];
-    byProduct[item.product].push(item);
+  currentPackingData = { date, salmonItems, otherItems };
+
+  const ck = v => v ? '&#10004;' : '—';
+
+  let html = '';
+
+  if (salmonItems.length) {
+    const rows = salmonItems.map((item, i) => `<tr>
+      <td class="mono" style="text-align:center;">${i + 1}</td>
+      <td style="font-weight:bold;">${item.customer}</td>
+      <td>${item.product}</td>
+      <td class="mono">${item.quantity} ${item.unit}</td>
+      <td>${item.cut || '—'}</td>
+      <td style="text-align:center;color:${item.skin_off?'var(--red)':'var(--gray-mid)'};">${ck(item.skin_off)}</td>
+      <td style="text-align:center;color:${item.scale?'var(--red)':'var(--gray-mid)'};">${ck(item.scale)}</td>
+      <td style="text-align:center;color:${item.pbo?'var(--red)':'var(--gray-mid)'};">${ck(item.pbo)}</td>
+      <td style="text-align:center;color:${item.hg?'var(--red)':'var(--gray-mid)'};">${ck(item.hg)}</td>
+      <td style="font-size:11px;color:var(--gray-dark);">${item.notes}</td>
+    </tr>`).join('');
+    html += `
+      <div class="section-bar" style="margin-bottom:0;">SALMON — ${salmonItems.length} line item${salmonItems.length!==1?'s':''}</div>
+      <div class="table-card" style="margin-top:0;border-top:none;margin-bottom:16px;">
+        <table>
+          <thead><tr>
+            <th style="width:36px;">#</th>
+            <th>Customer</th><th>Product</th><th>Qty / Unit</th>
+            <th>Cut</th>
+            <th style="text-align:center;">Skin Off</th>
+            <th style="text-align:center;">Scale</th>
+            <th style="text-align:center;">PBO</th>
+            <th style="text-align:center;">H&amp;G</th>
+            <th>Notes</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
   }
 
-  currentPackingData = { date, byProduct };
-
-  const rows = allItems.map(item => {
-    const cutSpec = [item.cut, item.skin_off && 'Skin Off', item.scale && 'Scale', item.pbo_hg && 'PBO H&G'].filter(Boolean).join(' · ') || '—';
-    return `<tr>
-      <td>${item.product}</td>
+  if (otherItems.length) {
+    const rows = otherItems.map((item, i) => `<tr>
+      <td class="mono" style="text-align:center;">${i + 1}</td>
       <td style="font-weight:bold;">${item.customer}</td>
+      <td>${item.product}</td>
       <td class="mono">${item.quantity} ${item.unit}</td>
-      <td>${cutSpec}</td>
-      <td>${item.notes}</td>
-    </tr>`;
-  });
+      <td style="font-size:11px;color:var(--gray-dark);">${item.notes}</td>
+    </tr>`).join('');
+    html += `
+      <div class="section-bar" style="margin-bottom:0;">OTHER PRODUCTS — ${otherItems.length} line item${otherItems.length!==1?'s':''}</div>
+      <div class="table-card" style="margin-top:0;border-top:none;">
+        <table>
+          <thead><tr>
+            <th style="width:36px;">#</th>
+            <th>Customer</th><th>Product</th><th>Qty / Unit</th><th>Notes</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }
 
-  content.innerHTML = `
-    <div class="section-bar">Packing Sheet — ${date}</div>
-    <div class="table-card" style="margin-top:0;border-top:none;">
-      <table>
-        <thead><tr><th>Product</th><th>Customer</th><th>Qty / Unit</th><th>Cut Spec</th><th>Notes</th></tr></thead>
-        <tbody>${rows.join('') || '<tr><td colspan="5" class="empty-state">No items</td></tr>'}</tbody>
-      </table>
-    </div>`;
+  if (!html) html = '<div class="empty-state">No line items for this date.</div>';
 
+  content.innerHTML = html;
   document.getElementById('export-pdf-btn').style.display = '';
 }
 
 function exportPackingPDF() {
   if (!currentPackingData) return;
-  const { date, byProduct } = currentPackingData;
+  const { date, salmonItems, otherItems } = currentPackingData;
+  const ck = v => v ? 'X' : '';
 
-  const productSections = Object.entries(byProduct).map(([product, items]) => {
-    const rows = items.map(item => {
-      const cutSpec = [item.cut, item.skin_off && 'Skin Off', item.scale && 'Scale', item.pbo_hg && 'PBO H&G'].filter(Boolean).join(' · ') || '—';
-      return `<tr>
-        <td>${item.customer}</td>
-        <td>${item.quantity} ${item.unit}</td>
-        <td><strong>${cutSpec}</strong></td>
-        <td>${item.notes || ''}</td>
-      </tr>`;
-    }).join('');
-    return `
-      <div class="product-block">
-        <div class="product-header">${product}</div>
+  let body = '';
+
+  if (salmonItems.length) {
+    const rows = salmonItems.map((item, i) => `<tr>
+      <td style="text-align:center;">${i + 1}</td>
+      <td>${item.customer}</td>
+      <td>${item.product}</td>
+      <td>${item.quantity} ${item.unit}</td>
+      <td><strong>${item.cut || '—'}</strong></td>
+      <td style="text-align:center;">${ck(item.skin_off)}</td>
+      <td style="text-align:center;">${ck(item.scale)}</td>
+      <td style="text-align:center;">${ck(item.pbo)}</td>
+      <td style="text-align:center;">${ck(item.hg)}</td>
+      <td>${item.notes || ''}</td>
+    </tr>`).join('');
+    body += `
+      <div class="section-block">
+        <div class="section-header">Salmon</div>
         <table>
-          <thead><tr><th>Customer</th><th>Qty / Unit</th><th>Cut Spec</th><th>Notes</th></tr></thead>
+          <thead><tr>
+            <th style="width:30px;">#</th>
+            <th>Customer</th><th>Product</th><th>Qty / Unit</th>
+            <th>Cut</th>
+            <th style="text-align:center;">Skin Off</th>
+            <th style="text-align:center;">Scale</th>
+            <th style="text-align:center;">PBO</th>
+            <th style="text-align:center;">H&amp;G</th>
+            <th>Notes</th>
+          </tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>`;
-  }).join('');
+  }
+
+  if (otherItems.length) {
+    const rows = otherItems.map((item, i) => `<tr>
+      <td style="text-align:center;">${i + 1}</td>
+      <td>${item.customer}</td>
+      <td>${item.product}</td>
+      <td>${item.quantity} ${item.unit}</td>
+      <td>${item.notes || ''}</td>
+    </tr>`).join('');
+    body += `
+      <div class="section-block" style="margin-top:24px;">
+        <div class="section-header">Other Products</div>
+        <table>
+          <thead><tr>
+            <th style="width:30px;">#</th>
+            <th>Customer</th><th>Product</th><th>Qty / Unit</th><th>Notes</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }
 
   const html = `<!DOCTYPE html>
 <html>
@@ -781,22 +890,22 @@ function exportPackingPDF() {
 <title>Packing Sheet — ${date}</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, sans-serif; font-size: 12pt; color: #000; background: white; padding: 20px; }
+  body { font-family: Arial, sans-serif; font-size: 11pt; color: #000; background: white; padding: 20px; }
   .header { border-bottom: 3px solid #C00000; padding-bottom: 10px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: flex-end; }
   .header-title { font-size: 18pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.04em; }
   .header-sub { font-size: 10pt; color: #555; text-transform: uppercase; letter-spacing: 0.06em; margin-top: 2px; }
   .header-date { font-size: 14pt; font-weight: bold; color: #C00000; text-align: right; }
-  .product-block { margin-bottom: 20px; page-break-inside: avoid; }
-  .product-header { background: #1A1A1A; color: white; font-size: 13pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.05em; padding: 6px 12px; margin-bottom: 0; }
+  .section-block { margin-bottom: 24px; page-break-inside: avoid; }
+  .section-header { background: #1A1A1A; color: white; font-size: 12pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.05em; padding: 6px 12px; }
   table { width: 100%; border-collapse: collapse; }
   thead tr { background: #F2F2F2; }
-  th { padding: 6px 10px; text-align: left; font-size: 9pt; text-transform: uppercase; letter-spacing: 0.04em; border: 1px solid #BFBFBF; }
-  td { padding: 7px 10px; font-size: 11pt; border: 1px solid #BFBFBF; vertical-align: top; }
+  th { padding: 5px 8px; text-align: left; font-size: 8pt; text-transform: uppercase; letter-spacing: 0.04em; border: 1px solid #BFBFBF; }
+  td { padding: 6px 8px; font-size: 10pt; border: 1px solid #BFBFBF; vertical-align: top; }
   tbody tr:nth-child(even) { background: #FAFAFA; }
   .footer { margin-top: 24px; border-top: 1px solid #BFBFBF; padding-top: 8px; font-size: 9pt; color: #888; display: flex; justify-content: space-between; }
   @media print {
     body { padding: 0; }
-    @page { margin: 1.5cm; size: A4 portrait; }
+    @page { margin: 1.5cm; size: A4 landscape; }
   }
 </style>
 </head>
@@ -808,7 +917,7 @@ function exportPackingPDF() {
   </div>
   <div class="header-date">Delivery: ${date}</div>
 </div>
-${productSections || '<p style="color:#888;font-style:italic;">No items for this date.</p>'}
+${body || '<p style="color:#888;font-style:italic;">No items for this date.</p>'}
 <div class="footer">
   <span>Seven Star Food LLC — Confidential</span>
   <span>Printed: ${new Date().toLocaleString()}</span>
@@ -905,7 +1014,8 @@ async function submitCustomer() {
     salmon_cut: document.getElementById('nc-cut').value || null,
     skin_off: document.getElementById('nc-skinoff').value === 'true',
     scale: document.getElementById('nc-scale').value === 'true',
-    pbo_hg: document.getElementById('nc-pbohg').value === 'true',
+    pbo: document.getElementById('nc-pbo').value === 'true',
+    hg: document.getElementById('nc-hg').value === 'true',
     notes: document.getElementById('nc-notes').value.trim() || null,
   };
 
@@ -924,8 +1034,8 @@ async function submitCustomer() {
 }
 
 /* ── Navigation ── */
-const panelTitles = { orders:'Orders', packing:'Packing Report', products:'Products', salmon:'Salmon Cuts', inventory:'Inventory', customers:'Customers' };
-const panelBtns   = { orders:'+ NEW ORDER', packing:'GENERATE REPORT', products:'+ ADD PRODUCT', salmon:'', inventory:'', customers:'+ NEW CUSTOMER' };
+const panelTitles = { orders:'Orders', packing:'Packing Report', products:'Products', salmon:'Salmon Cuts', inventory:'Inventory', customers:'Customers', pending:'Pending Approvals' };
+const panelBtns   = { orders:'+ NEW ORDER', packing:'GENERATE REPORT', products:'+ ADD PRODUCT', salmon:'', inventory:'', customers:'+ NEW CUSTOMER', pending:'' };
 
 function showPanel(name, el) {
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
@@ -936,6 +1046,7 @@ function showPanel(name, el) {
   const btn = document.getElementById('topbar-btn');
   btn.textContent = panelBtns[name] || '';
   btn.style.display = panelBtns[name] ? '' : 'none';
+  if (name === 'pending') loadPending();
 }
 
 function handleTopbarBtn() {
@@ -953,6 +1064,58 @@ document.querySelectorAll('.modal-overlay').forEach(m => {
 });
 
 function showErr(el, msg) { el.textContent = msg; el.style.display = 'block'; }
+
+/* ── Pending Approvals ── */
+async function loadPending() {
+  const data = await api('/api/admin/pending');
+  if (!data) return;
+
+  const badge = document.getElementById('pending-badge');
+  const navPending = document.getElementById('nav-pending');
+  if (data.length > 0) {
+    badge.textContent = data.length;
+    badge.style.display = '';
+    navPending.style.color = '#ffcccc';
+  } else {
+    badge.style.display = 'none';
+    navPending.style.color = '';
+  }
+
+  document.getElementById('pending-count').textContent = data.length + ' requests';
+  document.getElementById('pending-body').innerHTML = data.length ? data.map(p => {
+    const contact = [p.user_name].filter(Boolean).join(' ') || '—';
+    const date = p.created_at ? new Date(p.created_at).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }) : '—';
+    return `<tr>
+      <td style="font-weight:bold;">${p.company_name}</td>
+      <td>${contact}</td>
+      <td style="font-size:11px;">${p.email || '—'}</td>
+      <td class="mono" style="font-size:11px;">${p.phone || '—'}</td>
+      <td style="font-size:11px;">${p.address || '—'}</td>
+      <td style="font-size:11px;color:var(--gray-dark);">${date}</td>
+      <td style="display:flex;gap:4px;">
+        <button class="action-btn" style="background:#E2EFDA;color:#375623;border-color:#375623;" onclick="approveCustomer(${p.id},'${p.company_name}')">&#10004; APPROVE</button>
+        <button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="rejectCustomer(${p.id},'${p.company_name}')">&#10005; REJECT</button>
+      </td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="7" class="empty-state">No pending signups.</td></tr>';
+}
+
+async function approveCustomer(id, name) {
+  if (!confirm(`Approve ${name}? They will be able to log in immediately.`)) return;
+  const res = await api(`/api/admin/approve/${id}`, { method: 'POST' });
+  if (res && res.customer_id) {
+    await loadPending();
+    allCustomers = await api('/api/customers') || allCustomers;
+    renderCustomers();
+    updateStats();
+  }
+}
+
+async function rejectCustomer(id, name) {
+  if (!confirm(`Reject and delete ${name}? This cannot be undone.`)) return;
+  const res = await api(`/api/admin/reject/${id}`, { method: 'POST' });
+  if (res) await loadPending();
+}
 
 /* ── Init ── */
 if (token) {

@@ -18,7 +18,7 @@ async function createCustomer(req, res) {
   const {
     company_name, first_name, last_name, phone, email,
     language_pref, ordering_method, salmon_cut,
-    skin_off, scale, pbo_hg, notes,
+    skin_off, scale, pbo, hg, notes,
   } = req.body;
 
   if (!company_name) return res.status(400).json({ error: 'company_name is required' });
@@ -27,12 +27,12 @@ async function createCustomer(req, res) {
     `INSERT INTO customers
        (company_name, first_name, last_name, phone, email,
         language_pref, ordering_method, salmon_cut,
-        skin_off, scale, pbo_hg, notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        skin_off, scale, pbo, hg, notes)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
      RETURNING *`,
     [company_name, first_name, last_name, phone, email,
       language_pref || 'English', ordering_method || 'Mobile App',
-      salmon_cut, skin_off ?? false, scale ?? false, pbo_hg ?? false, notes]
+      salmon_cut, skin_off ?? false, scale ?? false, pbo ?? false, hg ?? false, notes]
   );
 
   res.status(201).json(result.rows[0]);
@@ -45,7 +45,7 @@ async function updateCustomer(req, res) {
   const allowed = [
     'company_name', 'first_name', 'last_name', 'phone', 'email',
     'language_pref', 'ordering_method', 'salmon_cut',
-    'skin_off', 'scale', 'pbo_hg', 'notes', 'active',
+    'skin_off', 'scale', 'pbo', 'hg', 'notes', 'active',
   ];
 
   const sets = [];

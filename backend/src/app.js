@@ -11,6 +11,7 @@ const productsRoutes = require('./routes/products');
 const customersRoutes = require('./routes/customers');
 const webhookRoutes = require('./routes/webhooks');
 const adminRoutes = require('./routes/admin');
+const mobileRoutes = require('./routes/mobile');
 const { purgeOldOrders } = require('./controllers/ordersController');
 
 const app = express();
@@ -33,6 +34,7 @@ app.use(
 
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/mobile', mobileRoutes);
 app.use('/api/orders', ordersRoutes);
 app.use('/api/products', productsRoutes);
 app.use('/api/customers', customersRoutes);

@@ -1,17 +1,25 @@
 const pool = require('../config/db');
-const { createQBInvoice } = require('../middleware/qbSync');
+const { createQBInvoice, createQBCustomer } = require('../middleware/qbSync');
 
 async function listOrders(req, res) {
-  const { date } = req.query;
+  const { date, customer_id } = req.query;
 
-  let whereClause, params;
+  const conditions = [];
+  const params = [];
+
   if (date) {
-    whereClause = 'WHERE o.delivery_date = $1';
-    params = [date];
+    params.push(date);
+    conditions.push(`o.delivery_date = $${params.length}`);
   } else {
-    whereClause = `WHERE o.delivery_date BETWEEN CURRENT_DATE - INTERVAL '2 days' AND CURRENT_DATE`;
-    params = [];
+    conditions.push(`o.delivery_date BETWEEN CURRENT_DATE - INTERVAL '2 days' AND CURRENT_DATE`);
   }
+
+  if (customer_id) {
+    params.push(customer_id);
+    conditions.push(`o.customer_id = $${params.length}`);
+  }
+
+  const whereClause = 'WHERE ' + conditions.join(' AND ');
 
   const result = await pool.query(
     `SELECT o.*, c.company_name, c.first_name, c.last_name
@@ -30,7 +38,7 @@ async function getOrder(req, res) {
 
   const orderResult = await pool.query(
     `SELECT o.*, c.company_name, c.first_name, c.last_name, c.salmon_cut,
-            c.skin_off, c.scale, c.pbo_hg
+            c.skin_off, c.scale, c.pbo, c.hg
      FROM orders o
      JOIN customers c ON c.id = o.customer_id
      WHERE o.id = $1`,
@@ -93,10 +101,36 @@ async function createOrder(req, res) {
 }
 
 async function pushToQB(order, items) {
-  // Fetch customer qb_customer_id
-  const custResult = await pool.query('SELECT qb_customer_id FROM customers WHERE id = $1', [order.customer_id]);
-  const qbCustomerId = custResult.rows[0]?.qb_customer_id;
-  if (!qbCustomerId) throw new Error(`Customer ${order.customer_id} has no QB ID — skipping invoice`);
+  const custResult = await pool.query(
+    `SELECT c.qb_customer_id, c.company_name, c.first_name, c.last_name, c.phone,
+            COALESCE(c.email, mu.email) AS email
+     FROM customers c
+     LEFT JOIN mobile_users mu ON mu.customer_id = c.id
+     WHERE c.id = $1
+     LIMIT 1`,
+    [order.customer_id]
+  );
+  const customer = custResult.rows[0];
+  let qbCustomerId = customer?.qb_customer_id;
+
+  if (!qbCustomerId) {
+    const displayName = customer.company_name ||
+      [customer.first_name, customer.last_name].filter(Boolean).join(' ') ||
+      `Customer ${order.customer_id}`;
+
+    const qbCustomer = await createQBCustomer({
+      DisplayName: displayName,
+      CompanyName: customer.company_name || null,
+      GivenName: customer.first_name || null,
+      FamilyName: customer.last_name || null,
+      PrimaryEmailAddr: customer.email ? { Address: customer.email } : undefined,
+      PrimaryPhone: customer.phone ? { FreeFormNumber: customer.phone } : undefined,
+    });
+
+    qbCustomerId = qbCustomer.Id;
+    await pool.query('UPDATE customers SET qb_customer_id = $1 WHERE id = $2', [qbCustomerId, order.customer_id]);
+    console.log(`Created QB customer ${qbCustomerId} for local customer ${order.customer_id}`);
+  }
 
   // Fetch qb_item_id for each product
   const productIds = items.map(i => i.product_id);
