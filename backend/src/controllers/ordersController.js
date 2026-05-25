@@ -1,5 +1,5 @@
 const pool = require('../config/db');
-const { createQBInvoice, createQBCustomer } = require('../middleware/qbSync');
+const { createQBInvoice, createQBCustomer, getQBClient } = require('../middleware/qbSync');
 
 async function listOrders(req, res) {
   const { date, customer_id } = req.query;
@@ -118,18 +118,38 @@ async function pushToQB(order, items) {
       [customer.first_name, customer.last_name].filter(Boolean).join(' ') ||
       `Customer ${order.customer_id}`;
 
-    const qbCustomer = await createQBCustomer({
-      DisplayName: displayName,
-      CompanyName: customer.company_name || null,
-      GivenName: customer.first_name || null,
-      FamilyName: customer.last_name || null,
-      PrimaryEmailAddr: customer.email ? { Address: customer.email } : undefined,
-      PrimaryPhone: customer.phone ? { FreeFormNumber: customer.phone } : undefined,
-    });
+    // Search QB first — avoid duplicate name error if customer already exists there
+    try {
+      const qbClient = await getQBClient();
+      const q = `SELECT * FROM Customer WHERE DisplayName = '${displayName.replace(/'/g, "\\'")}'`;
+      const { data } = await qbClient.get(`/query?query=${encodeURIComponent(q)}&minorversion=65`);
+      const existing = data?.QueryResponse?.Customer?.[0];
+      if (existing) {
+        qbCustomerId = existing.Id;
+        console.log(`Found existing QB customer ${qbCustomerId} for "${displayName}"`);
+      }
+    } catch (e) {
+      console.warn('QB customer lookup failed, will attempt create:', e.message);
+    }
 
-    qbCustomerId = qbCustomer.Id;
-    await pool.query('UPDATE customers SET qb_customer_id = $1 WHERE id = $2', [qbCustomerId, order.customer_id]);
-    console.log(`Created QB customer ${qbCustomerId} for local customer ${order.customer_id}`);
+    if (!qbCustomerId) {
+      const qbCustomer = await createQBCustomer({
+        DisplayName: displayName,
+        CompanyName: customer.company_name || null,
+        GivenName: customer.first_name || null,
+        FamilyName: customer.last_name || null,
+        PrimaryEmailAddr: customer.email ? { Address: customer.email } : undefined,
+        PrimaryPhone: customer.phone ? { FreeFormNumber: customer.phone } : undefined,
+      });
+      qbCustomerId = qbCustomer.Id;
+      console.log(`Created QB customer ${qbCustomerId} for local customer ${order.customer_id}`);
+    }
+
+    // Only update if this qb_customer_id isn't already assigned to another row
+    const taken = await pool.query('SELECT id FROM customers WHERE qb_customer_id = $1', [qbCustomerId]);
+    if (!taken.rows.length) {
+      await pool.query('UPDATE customers SET qb_customer_id = $1 WHERE id = $2', [qbCustomerId, order.customer_id]);
+    }
   }
 
   // Fetch qb_item_id for each product
@@ -197,7 +217,8 @@ async function syncPendingInvoices(req, res) {
       await pushToQB(order, order.items);
       synced++;
     } catch (err) {
-      console.error(`Pending invoice sync failed for order ${order.id}:`, err.message);
+      const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+      console.error(`Pending invoice sync failed for order ${order.id}:`, detail);
       failed++;
     }
   }

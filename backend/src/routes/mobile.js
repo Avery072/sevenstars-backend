@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { requireCustomerAuth } = require('../middleware/auth');
 const pool = require('../config/db');
-const { createQBInvoice, createQBCustomer } = require('../middleware/qbSync');
+const { createQBInvoice, createQBCustomer, getQBClient } = require('../middleware/qbSync');
 
 router.use(requireCustomerAuth);
 
@@ -97,26 +97,40 @@ async function pushToQB(order, items, productMap) {
   let qbCustomerId = customer?.qb_customer_id;
 
   if (!qbCustomerId) {
-    // Customer came from mobile signup — create them in QB now
     const displayName = customer.company_name ||
       [customer.first_name, customer.last_name].filter(Boolean).join(' ') ||
       `Customer ${order.customer_id}`;
 
-    const qbCustomer = await createQBCustomer({
-      DisplayName: displayName,
-      CompanyName: customer.company_name || null,
-      GivenName: customer.first_name || null,
-      FamilyName: customer.last_name || null,
-      PrimaryEmailAddr: customer.email ? { Address: customer.email } : undefined,
-      PrimaryPhone: customer.phone ? { FreeFormNumber: customer.phone } : undefined,
-    });
+    try {
+      const qbClient = await getQBClient();
+      const q = `SELECT * FROM Customer WHERE DisplayName = '${displayName.replace(/'/g, "\\'")}'`;
+      const { data } = await qbClient.get(`/query?query=${encodeURIComponent(q)}&minorversion=65`);
+      const existing = data?.QueryResponse?.Customer?.[0];
+      if (existing) {
+        qbCustomerId = existing.Id;
+        console.log(`Found existing QB customer ${qbCustomerId} for "${displayName}"`);
+      }
+    } catch (e) {
+      console.warn('QB customer lookup failed, will attempt create:', e.message);
+    }
 
-    qbCustomerId = qbCustomer.Id;
+    if (!qbCustomerId) {
+      const qbCustomer = await createQBCustomer({
+        DisplayName: displayName,
+        CompanyName: customer.company_name || null,
+        GivenName: customer.first_name || null,
+        FamilyName: customer.last_name || null,
+        PrimaryEmailAddr: customer.email ? { Address: customer.email } : undefined,
+        PrimaryPhone: customer.phone ? { FreeFormNumber: customer.phone } : undefined,
+      });
+      qbCustomerId = qbCustomer.Id;
+      console.log(`Created QB customer ${qbCustomerId} for local customer ${order.customer_id}`);
+    }
+
     await pool.query(
       'UPDATE customers SET qb_customer_id = $1 WHERE id = $2',
       [qbCustomerId, order.customer_id]
     );
-    console.log(`Created QB customer ${qbCustomerId} for local customer ${order.customer_id}`);
   }
 
   const lines = items
