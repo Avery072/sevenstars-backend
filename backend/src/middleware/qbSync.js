@@ -42,6 +42,12 @@ async function createQBInvoice(invoicePayload) {
   return data.Invoice;
 }
 
+async function createQBCustomer(customerPayload) {
+  const client = await getQBClient();
+  const { data } = await client.post('/customer?minorversion=65', customerPayload);
+  return data.Customer;
+}
+
 async function createQBItem(itemPayload) {
   const client = await getQBClient();
   const { data } = await client.post('/item?minorversion=65', itemPayload);
@@ -80,6 +86,7 @@ module.exports = {
   fetchQBCustomer,
   fetchQBInvoice,
   createQBInvoice,
+  createQBCustomer,
   createQBItem,
   updateQBItem,
 };
