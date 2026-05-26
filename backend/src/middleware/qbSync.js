@@ -55,16 +55,20 @@ async function createQBItem(itemPayload) {
 }
 
 // Fetches an existing QB invoice and appends new line items to it.
-// QB requires sending Id + SyncToken for optimistic concurrency.
+// Must send the full invoice object (not sparse) so QB replaces the Line array correctly.
+// Auto-generated lines (SubTotal, Discount) are stripped — QB recalculates them.
 async function appendToQBInvoice(invoiceId, newLines) {
   const client = await getQBClient();
   const { data } = await client.get(`/invoice/${invoiceId}?minorversion=65`);
   const inv = data.Invoice;
+
+  const keepLines = (inv.Line || []).filter(l =>
+    l.DetailType === 'SalesItemLineDetail' || l.DetailType === 'DescriptionOnlyLineDetail'
+  );
+
   const { data: updated } = await client.post('/invoice?minorversion=65', {
-    sparse: true,
-    Id: inv.Id,
-    SyncToken: inv.SyncToken,
-    Line: [...(inv.Line || []), ...newLines],
+    ...inv,
+    Line: [...keepLines, ...newLines],
   });
   return updated.Invoice;
 }
