@@ -16,7 +16,7 @@ require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const xlsx = require('xlsx');
 const { Pool } = require('pg');
 
-const XLSX_PATH = path.join(__dirname, '../../../Salmon List Final (1).xlsx');
+const XLSX_PATH = path.join(__dirname, '../public/Salmon List Final (1).csv');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -27,8 +27,7 @@ function isChecked(val) {
 
 async function run() {
   const wb = xlsx.readFile(XLSX_PATH);
-  // CustomerList sheet: NAME | CUT | SKIN OFF | SCALE | PBO | H&G (row 0 = headers)
-  const ws = wb.Sheets['CustomerList'];
+  const ws = wb.Sheets[wb.SheetNames[0]];
   const raw = xlsx.utils.sheet_to_json(ws, { header: 1, defval: '' });
   // Skip header row; columns: 0=NAME 1=CUT 2=SKIN OFF 3=SCALE 4=PBO 5=H&G
   const rows = raw.slice(1);
