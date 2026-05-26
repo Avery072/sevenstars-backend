@@ -637,6 +637,7 @@ function renderProducts(q = '') {
       : p.quantity_on_hand <= 0 ? '<span class="badge badge-red">OUT OF STOCK</span>'
       : p.reorder_point && p.quantity_on_hand <= p.reorder_point ? '<span class="badge badge-amber">LOW</span>'
       : '<span class="badge badge-green">ACTIVE</span>';
+    const qbBadge = p.qb_item_id ? '' : ' <span class="badge badge-gray" title="Not linked to QuickBooks — add this product in QB then run Sync from QB">NO QB</span>';
     const price = p.show_price ? '$'+parseFloat(p.price||0).toFixed(2) : '<span style="color:var(--gray-dark);font-style:italic;">Market</span>';
     return `<tr>
       <td class="mono" style="font-size:11px;">${p.sku}</td>
@@ -645,7 +646,7 @@ function renderProducts(q = '') {
       <td class="mono">${p.cost ? '$'+parseFloat(p.cost).toFixed(2) : '—'}</td>
       <td class="mono">${price}</td>
       <td class="mono">${p.quantity_on_hand ?? '—'}</td>
-      <td>${status}</td>
+      <td>${status}${qbBadge}</td>
     </tr>`;
   }).join('') : '<tr><td colspan="7" class="empty-state">No products found.</td></tr>';
 }
@@ -944,7 +945,7 @@ function addOrderItemRow() {
   const list = document.getElementById('no-items-list');
   const div = document.createElement('div');
   div.style.cssText = 'display:grid;grid-template-columns:2fr 80px 70px 80px;gap:6px;align-items:center;';
-  const productOptions = allProducts.map(p => `<option value="${p.id}" data-price="${p.price||0}" data-unit="${p.unit}">${p.description}</option>`).join('');
+  const productOptions = allProducts.map(p => `<option value="${p.id}" data-price="${p.price||0}" data-unit="${p.unit}">${p.description}${p.qb_item_id ? '' : ' [NO QB]'}</option>`).join('');
   div.innerHTML = `
     <select class="form-select" onchange="syncUnit(this)">${productOptions}</select>
     <input class="form-input" placeholder="Qty" type="number" value="1" min="0.01" step="0.01">

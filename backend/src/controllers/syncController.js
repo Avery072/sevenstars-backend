@@ -31,27 +31,45 @@ async function upsertItems(items) {
   let count = 0;
   for (const item of items) {
     if (item.Type === 'Category' || item.Type === 'Group') continue;
-    await pool.query(
-      `INSERT INTO products (qb_item_id, sku, description, unit, price, cost, active, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-       ON CONFLICT (qb_item_id) DO UPDATE
-         SET sku         = EXCLUDED.sku,
-             description = EXCLUDED.description,
-             unit        = EXCLUDED.unit,
-             price       = EXCLUDED.price,
-             cost        = EXCLUDED.cost,
-             active      = EXCLUDED.active,
-             updated_at  = NOW()`,
-      [
-        item.Id,
-        item.Name,
-        item.Description || item.Name,
-        item.UnitOfMeasure || 'ea',
-        item.UnitPrice || 0,
-        item.PurchaseCost || 0,
-        item.Active !== false,
-      ]
+
+    const vals = [
+      item.Id,
+      item.Name,
+      item.Description || item.Name,
+      item.UnitOfMeasure || 'ea',
+      item.UnitPrice || 0,
+      item.PurchaseCost || 0,
+      item.Active !== false,
+    ];
+
+    // If a locally-created product exists with the same SKU but no QB ID yet,
+    // link it rather than creating a duplicate row.
+    const linked = await pool.query(
+      `UPDATE products
+       SET qb_item_id = $1, description = $3, unit = $4,
+           price = $5, cost = $6, active = $7, updated_at = NOW()
+       WHERE LOWER(sku) = LOWER($2)
+         AND qb_item_id IS NULL
+         AND NOT EXISTS (SELECT 1 FROM products WHERE qb_item_id = $1)
+       RETURNING id`,
+      vals
     );
+
+    if (!linked.rows.length) {
+      await pool.query(
+        `INSERT INTO products (qb_item_id, sku, description, unit, price, cost, active, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+         ON CONFLICT (qb_item_id) DO UPDATE
+           SET sku         = EXCLUDED.sku,
+               description = EXCLUDED.description,
+               unit        = EXCLUDED.unit,
+               price       = EXCLUDED.price,
+               cost        = EXCLUDED.cost,
+               active      = EXCLUDED.active,
+               updated_at  = NOW()`,
+        vals
+      );
+    }
     count++;
   }
   return count;

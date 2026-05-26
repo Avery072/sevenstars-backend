@@ -89,7 +89,10 @@ async function createOrder(req, res) {
     await client.query('COMMIT');
 
     // Push to QuickBooks async — don't block the response
-    pushToQB(order, items).catch(err => console.error('QB invoice push failed:', err.message));
+    pushToQB(order, items).catch(err => {
+      const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+      console.error(`QB invoice push failed for order ${order.id}:`, detail);
+    });
 
     res.status(201).json(order);
   } catch (err) {
@@ -152,24 +155,33 @@ async function pushToQB(order, items) {
     }
   }
 
-  // Fetch qb_item_id for each product
+  // Fetch qb_item_id and canonical price from DB for each product
   const productIds = items.map(i => i.product_id);
-  const prodResult = await pool.query('SELECT id, qb_item_id FROM products WHERE id = ANY($1)', [productIds]);
-  const qbItemMap = Object.fromEntries(prodResult.rows.map(r => [r.id, r.qb_item_id]));
+  const prodResult = await pool.query('SELECT id, qb_item_id, price FROM products WHERE id = ANY($1)', [productIds]);
+  const productMap = Object.fromEntries(prodResult.rows.map(r => [r.id, r]));
+
+  const noQbId = items.filter(i => !productMap[i.product_id]?.qb_item_id).map(i => i.product_id);
+  if (noQbId.length) {
+    console.warn(`Order ${order.id}: skipping ${noQbId.length} item(s) with no qb_item_id — product ids: ${noQbId.join(', ')}`);
+  }
 
   const lines = items
-    .filter(item => qbItemMap[item.product_id])
-    .map(item => ({
-      Amount: parseFloat(item.quantity) * parseFloat(item.unit_price || 0),
-      DetailType: 'SalesItemLineDetail',
-      SalesItemLineDetail: {
-        ItemRef: { value: qbItemMap[item.product_id] },
-        Qty: parseFloat(item.quantity),
-        UnitPrice: parseFloat(item.unit_price || 0),
-      },
-    }));
+    .filter(item => productMap[item.product_id]?.qb_item_id)
+    .map(item => {
+      const p = productMap[item.product_id];
+      const unitPrice = parseFloat(p.price ?? item.unit_price ?? 0);
+      return {
+        Amount: parseFloat(item.quantity) * unitPrice,
+        DetailType: 'SalesItemLineDetail',
+        SalesItemLineDetail: {
+          ItemRef: { value: p.qb_item_id },
+          Qty: parseFloat(item.quantity),
+          UnitPrice: unitPrice,
+        },
+      };
+    });
 
-  if (!lines.length) throw new Error('No QB-linked items on order — skipping invoice');
+  if (!lines.length) throw new Error(`No QB-linked items on order ${order.id} — run Sync from QB to populate qb_item_id on products`);
 
   const payload = {
     CustomerRef: { value: qbCustomerId },
