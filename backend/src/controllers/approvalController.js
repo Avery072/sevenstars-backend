@@ -3,7 +3,7 @@ const pool = require('../config/db');
 async function listPending(req, res) {
   const result = await pool.query(
     `SELECT c.id, c.company_name, c.first_name, c.last_name,
-            c.phone, c.address, c.created_at,
+            c.phone, c.address, c.resale_certificate_number, c.created_at,
             mu.email, mu.name AS user_name
      FROM customers c
      LEFT JOIN mobile_users mu ON mu.customer_id = c.id

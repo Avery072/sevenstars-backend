@@ -16,6 +16,10 @@ const { purgeOldOrders } = require('./controllers/ordersController');
 
 const app = express();
 
+// Railway (and most PaaS) sit behind a reverse proxy — trust it so
+// express-rate-limit can read the real client IP from X-Forwarded-For
+app.set('trust proxy', 1);
+
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
 app.use(express.static(path.join(__dirname, '../public')));

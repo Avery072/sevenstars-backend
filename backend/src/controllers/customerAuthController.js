@@ -38,7 +38,7 @@ async function customerLogin(req, res) {
 
 // POST /api/auth/customer-signup
 async function customerSignup(req, res) {
-  const { company_name, address, phone, first_name, last_name, email, password } = req.body;
+  const { company_name, address, phone, first_name, last_name, email, password, resale_certificate_number } = req.body;
 
   if (!company_name || !email || !password) {
     return res.status(400).json({ error: 'company_name, email, and password are required' });
@@ -56,9 +56,9 @@ async function customerSignup(req, res) {
 
     // Create pending customer (active = false until admin approves)
     const customerResult = await client.query(
-      `INSERT INTO customers (company_name, first_name, last_name, phone, address, active)
-       VALUES ($1, $2, $3, $4, $5, FALSE) RETURNING id`,
-      [company_name, first_name || null, last_name || null, phone || null, address || null]
+      `INSERT INTO customers (company_name, first_name, last_name, phone, address, resale_certificate_number, active)
+       VALUES ($1, $2, $3, $4, $5, $6, FALSE) RETURNING id`,
+      [company_name, first_name || null, last_name || null, phone || null, address || null, resale_certificate_number || null]
     );
     const customer_id = customerResult.rows[0].id;
 

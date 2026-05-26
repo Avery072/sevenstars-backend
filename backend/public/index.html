@@ -326,9 +326,9 @@
             <div class="table-count" id="pending-count">— requests</div>
           </div>
           <table>
-            <thead><tr><th>Company</th><th>Contact</th><th>Email</th><th>Phone</th><th>Address</th><th>Requested</th><th>Action</th></tr></thead>
+            <thead><tr><th>Company</th><th>Contact</th><th>Email</th><th>Phone</th><th>Address</th><th>Resale #</th><th>Requested</th><th>Action</th></tr></thead>
             <tbody id="pending-body">
-              <tr><td colspan="7" class="empty-state">Loading...</td></tr>
+              <tr><td colspan="8" class="empty-state">Loading...</td></tr>
             </tbody>
           </table>
         </div>
@@ -661,8 +661,10 @@ function renderCustomers(q = '') {
   document.getElementById('customer-count').textContent = list.length + ' active';
   document.getElementById('customer-body').innerHTML = list.length ? list.map(c => {
     const contact = [c.first_name, c.last_name].filter(Boolean).join(' ') || '—';
+    const salmonBadge = (c.salmon_cut && c.salmon_cut !== 'N/A')
+      ? ' <span class="badge" style="background:#E2EFDA;color:#375623;border:1px solid #375623;">BUYS SALMON</span>' : '';
     return `<tr>
-      <td style="font-weight:bold;">${c.company_name}</td>
+      <td style="font-weight:bold;">${c.company_name}${salmonBadge}</td>
       <td style="color:var(--gray-dark);">${contact}</td>
       <td class="mono" style="font-size:12px;">${c.phone || '—'}</td>
       <td>${c.language_pref || 'English'}</td>
@@ -1092,13 +1094,14 @@ async function loadPending() {
       <td style="font-size:11px;">${p.email || '—'}</td>
       <td class="mono" style="font-size:11px;">${p.phone || '—'}</td>
       <td style="font-size:11px;">${p.address || '—'}</td>
+      <td style="font-size:11px;">${p.resale_certificate_number || '—'}</td>
       <td style="font-size:11px;color:var(--gray-dark);">${date}</td>
       <td style="display:flex;gap:4px;">
         <button class="action-btn" style="background:#E2EFDA;color:#375623;border-color:#375623;" onclick="approveCustomer(${p.id},'${p.company_name}')">&#10004; APPROVE</button>
         <button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="rejectCustomer(${p.id},'${p.company_name}')">&#10005; REJECT</button>
       </td>
     </tr>`;
-  }).join('') : '<tr><td colspan="7" class="empty-state">No pending signups.</td></tr>';
+  }).join('') : '<tr><td colspan="8" class="empty-state">No pending signups.</td></tr>';
 }
 
 async function approveCustomer(id, name) {
