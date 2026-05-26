@@ -8,7 +8,7 @@
 
 require('dotenv').config();
 const { Pool } = require('pg');
-const pool = new Pool({ connectionString: 'postgresql://localhost:5432/seven_stars_food' });
+const pool = new Pool({ connectionString: process.env.DATABASE_URL || 'postgresql://localhost:5432/seven_stars_food' });
 
 async function run() {
   const { rows: groups } = await pool.query(`
