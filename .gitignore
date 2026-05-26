@@ -1,0 +1,23 @@
+# Environment variables — never commit
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+*/node_modules/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+
+# Excel files (business data)
+*.xlsx
+*.xls
+
+# IDE
+.vscode/
+.idea/
