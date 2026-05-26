@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { requireCustomerAuth } = require('../middleware/auth');
 const pool = require('../config/db');
-const { createQBInvoice, createQBCustomer, getQBClient } = require('../middleware/qbSync');
+const { createQBInvoice, appendToQBInvoice, createQBCustomer, getQBClient } = require('../middleware/qbSync');
 
 router.use(requireCustomerAuth);
 
@@ -150,16 +150,32 @@ async function pushToQB(order, items, productMap) {
 
   if (!lines.length) throw new Error('No QB-linked items — skipping invoice');
 
-  const payload = {
-    CustomerRef: { value: qbCustomerId },
-    TxnDate: order.delivery_date,
-    Line: lines,
-    ...(order.notes ? { CustomerMemo: { value: order.notes } } : {}),
-  };
+  // Merge into existing invoice if one already exists for this customer + delivery date
+  const existing = await pool.query(
+    `SELECT qb_invoice_id FROM orders
+     WHERE customer_id = $1 AND delivery_date = $2 AND qb_invoice_id IS NOT NULL
+     ORDER BY id ASC LIMIT 1`,
+    [order.customer_id, order.delivery_date]
+  );
 
-  const invoice = await createQBInvoice(payload);
-  await pool.query('UPDATE orders SET qb_invoice_id = $1 WHERE id = $2', [invoice.Id, order.id]);
-  console.log(`QB invoice ${invoice.Id} created for mobile order ${order.id}`);
+  let invoiceId;
+  if (existing.rows.length) {
+    const updated = await appendToQBInvoice(existing.rows[0].qb_invoice_id, lines);
+    invoiceId = updated.Id;
+    console.log(`QB invoice ${invoiceId} updated — merged mobile order ${order.id} into existing invoice`);
+  } else {
+    const payload = {
+      CustomerRef: { value: qbCustomerId },
+      TxnDate: order.delivery_date,
+      Line: lines,
+      ...(order.notes ? { CustomerMemo: { value: order.notes } } : {}),
+    };
+    const invoice = await createQBInvoice(payload);
+    invoiceId = invoice.Id;
+    console.log(`QB invoice ${invoiceId} created for mobile order ${order.id}`);
+  }
+
+  await pool.query('UPDATE orders SET qb_invoice_id = $1 WHERE id = $2', [invoiceId, order.id]);
 }
 
 // PATCH /api/mobile/profile — update company-level salmon cut preferences

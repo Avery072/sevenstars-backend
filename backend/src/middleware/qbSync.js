@@ -54,6 +54,21 @@ async function createQBItem(itemPayload) {
   return data.Item;
 }
 
+// Fetches an existing QB invoice and appends new line items to it.
+// QB requires sending Id + SyncToken for optimistic concurrency.
+async function appendToQBInvoice(invoiceId, newLines) {
+  const client = await getQBClient();
+  const { data } = await client.get(`/invoice/${invoiceId}?minorversion=65`);
+  const inv = data.Invoice;
+  const { data: updated } = await client.post('/invoice?minorversion=65', {
+    sparse: true,
+    Id: inv.Id,
+    SyncToken: inv.SyncToken,
+    Line: [...(inv.Line || []), ...newLines],
+  });
+  return updated.Invoice;
+}
+
 async function updateQBItem(itemPayload) {
   const client = await getQBClient();
   const { data } = await client.post('/item?minorversion=65', itemPayload);
@@ -86,6 +101,7 @@ module.exports = {
   fetchQBCustomer,
   fetchQBInvoice,
   createQBInvoice,
+  appendToQBInvoice,
   createQBCustomer,
   createQBItem,
   updateQBItem,
