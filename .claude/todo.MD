@@ -42,10 +42,8 @@ Separate the packing report into two sections:
 - **Everything Else** — all other products. No cut columns.
 Both sections still show: customer, qty, unit, notes.
 
-#### 2. New Order Modal — 4 Default Item Rows
-When the New Order modal opens, start with 4 empty item rows instead of 1. Saves the user from clicking "+ Add Item" repeatedly for typical orders.
 
-#### 3. Orders Linked to Company, Not Individual User
+#### 4. Orders Linked to Company, Not Individual User
 Orders should be associated with a **company** (`customers.id`), not individual mobile users.
 - Mobile users will have their own login credentials
 - Multiple users can belong to the same company
@@ -183,3 +181,9 @@ psql postgresql://localhost:5432/seven_stars_food -c \
 3. Open `http://localhost:3001/api/auth/qb` → authorize QB
 4. Get token → run sync
 5. Open `http://localhost:3001`
+
+#NOT YET SYNCED INVENTORY AMOUNT TO SHOPPING
+Logic to link product
+
+#Merges orders into a single invoice
+
