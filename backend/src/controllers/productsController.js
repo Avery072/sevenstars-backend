@@ -1,5 +1,4 @@
 const pool = require('../config/db');
-const { createQBItem, updateQBItem } = require('../middleware/qbSync');
 
 async function listProducts(req, res) {
   const result = await pool.query(
@@ -21,24 +20,9 @@ async function createProduct(req, res) {
     [sku, description, category, unit, cost, price, show_price ?? true, reorder_point, vendor]
   );
 
-  const product = result.rows[0];
-
-  // Create in QB async — don't block the response
-  createQBItem({
-    Name: sku,
-    Description: description,
-    Type: 'Inventory',
-    UnitPrice: price,
-    IncomeAccountRef: { value: '1', name: 'Sales' },
-    AssetAccountRef: { value: '2', name: 'Inventory Asset' },
-    ExpenseAccountRef: { value: '3', name: 'Cost of Goods Sold' },
-  })
-    .then(async (qbItem) => {
-      await pool.query('UPDATE products SET qb_item_id = $1 WHERE id = $2', [qbItem.Id, product.id]);
-    })
-    .catch((err) => console.error('QB item creation failed:', err.message));
-
-  res.status(201).json(product);
+  // qb_item_id is left NULL — add the product in QuickBooks first,
+  // then run Sync from QB to link it. Products must be managed in QB.
+  res.status(201).json(result.rows[0]);
 }
 
 async function updateProduct(req, res) {
