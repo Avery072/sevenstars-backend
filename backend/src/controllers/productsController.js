@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { createQBItem } = require('../middleware/qbSync');
 
 async function listProducts(req, res) {
   const result = await pool.query(
@@ -20,8 +21,25 @@ async function createProduct(req, res) {
     [sku, description, category, unit, cost, price, show_price ?? true, reorder_point, vendor]
   );
 
-  // qb_item_id is left NULL — add the product in QuickBooks first,
-  // then run Sync from QB to link it. Products must be managed in QB.
+  try {
+    const qbItem = await createQBItem({
+      Name: sku,
+      Description: description,
+      Type: 'NonInventory',
+      UnitPrice: price || 0,
+      IncomeAccountRef: { value: '1', name: 'Sales' },
+      AssetAccountRef: { value: '2', name: 'Inventory Asset' },
+      ExpenseAccountRef: { value: '3', name: 'Cost of Goods Sold' },
+    });
+
+    if (qbItem && qbItem.Id) {
+      await pool.query('UPDATE products SET qb_item_id = $1 WHERE id = $2', [qbItem.Id, result.rows[0].id]);
+      result.rows[0].qb_item_id = qbItem.Id;
+    }
+  } catch (err) {
+    console.error('Failed to sync product to QuickBooks:', err);
+  }
+
   res.status(201).json(result.rows[0]);
 }
 
