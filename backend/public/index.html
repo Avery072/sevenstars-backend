@@ -683,6 +683,23 @@ async function viewOrder(id) {
     </table>`;
 }
 
+async function deleteProduct(id) {
+  const product = allProducts.find(p => p.id === id);
+  const sku = product ? product.sku : 'this product';
+
+  if (!confirm('Delete ' + sku + '? This will remove it from the product list.')) return;
+
+  const res = await api('/api/products/' + id, { method: 'DELETE' });
+
+  if (res && res.message) {
+    allProducts = await api('/api/products') || allProducts;
+    renderProducts();
+    updateStats();
+  } else {
+    alert((res && res.error) || 'Failed to delete product');
+  }
+}
+
 /* ── Products ── */
 function renderProducts(q = '') {
   const list = q ? allProducts.filter(p =>
@@ -704,7 +721,7 @@ function renderProducts(q = '') {
       <td class="mono">${product.cost ? '$'+parseFloat(product.cost).toFixed(2) : '—'}</td>
       <td class="mono">${price}</td>
       <td class="mono">${product.quantity_on_hand ?? '—'}</td>
-      <td><button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick='deleteProduct(${product.id}, ${JSON.stringify(product.sku)})'>✕ DELETE</button></td>
+      <td><button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="deleteProduct(${product.id})">✕ DELETE</button></td>
       <td>${status}${qbBadge}</td>
     </tr>`;
   }).join('') : '<tr><td colspan="8" class="empty-state">No products found.</td></tr>';
@@ -1131,20 +1148,6 @@ async function submitNewProduct() {
     updateStats();
   } else {
     showErr(errEl, (res && res.error) || 'Failed to create product');
-  }
-}
-
-async function deleteProduct(id, sku) {
-  if (!confirm(`Delete ${sku}? This will remove it from the product list.`)) return;
-
-  const res = await api(`/api/products/${id}`, { method: 'DELETE' });
-
-  if (res && res.message) {
-    allProducts = await api('/api/products') || allProducts;
-    renderProducts();
-    updateStats();
-  } else {
-    alert((res && res.error) || 'Failed to delete product');
   }
 }
 
