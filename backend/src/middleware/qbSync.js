@@ -4,7 +4,7 @@ const { getValidAccessToken } = require('../config/quickbooks');
 // Returns an axios instance pre-configured for the QBO API with a fresh token.
 async function getQBClient() {
   const { accessToken, realmId } = await getValidAccessToken();
-  const baseURL = `https://sandbox-quickbooks.api.intuit.com/v3/company/${realmId}`;
+  const baseURL = `https://quickbooks.api.intuit.com/v3/company/${realmId}`;
 
   return axios.create({
     baseURL,
@@ -165,3 +165,4 @@ module.exports = {
   getQBAccounts,
   updateQBItem,
 };
+
