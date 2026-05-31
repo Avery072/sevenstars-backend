@@ -69,19 +69,18 @@ async function createQBItem(itemPayload) {
 
   const payload = {
     ...itemPayload,
-    Type: 'NonInventory',
+    Type: itemPayload.Type || 'NonInventory',
   };
 
-  delete payload.IncomeAccountRef;
-  delete payload.AssetAccountRef;
-  delete payload.ExpenseAccountRef;
-
-  if (incomeAccount) {
+  if (incomeAccount && !payload.IncomeAccountRef) {
     payload.IncomeAccountRef = { value: incomeAccount.Id, name: incomeAccount.Name };
   }
 
-  if (incomeAccount && assetAccount && cogsAccount) {
+  if (assetAccount && !payload.AssetAccountRef) {
     payload.AssetAccountRef = { value: assetAccount.Id, name: assetAccount.Name };
+  }
+
+  if (cogsAccount && !payload.ExpenseAccountRef) {
     payload.ExpenseAccountRef = { value: cogsAccount.Id, name: cogsAccount.Name };
   }
 
@@ -165,4 +164,3 @@ module.exports = {
   getQBAccounts,
   updateQBItem,
 };
-
