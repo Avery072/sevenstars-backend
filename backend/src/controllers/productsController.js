@@ -1,5 +1,5 @@
 const pool = require('../config/db');
-const { createQBItem, deleteQBItem, getQBAccounts } = require('../middleware/qbSync');
+const { createQBItem, deleteQBItem } = require('../middleware/qbSync');
 
 async function listProducts(req, res) {
   const result = await pool.query(
@@ -9,19 +9,7 @@ async function listProducts(req, res) {
 }
 
 async function createProduct(req, res) {
-  const {
-    sku,
-    description,
-    category,
-    unit,
-    cost,
-    price,
-    show_price,
-    reorder_point,
-    vendor,
-    quantity_on_hand,
-    inv_start_date,
-  } = req.body;
+  const { sku, description, category, unit, cost, price, show_price, reorder_point, vendor } = req.body;
 
   if (!sku || !description || !unit) {
     return res.status(400).json({ error: 'sku, description, and unit are required' });
@@ -34,34 +22,11 @@ async function createProduct(req, res) {
   );
 
   try {
-    const accounts = await getQBAccounts();
-    const incomeAccount = accounts.find(a =>
-      (a.Name || '').includes('Sales of Product Income') || a.AccountType === 'Income'
-    );
-    const assetAccount = accounts.find(a =>
-      (a.Name || '').includes('Inventory Asset') || a.AccountSubType === 'Inventory'
-    );
-    const expenseAccount = accounts.find(a =>
-      (a.Name || '').includes('Cost of Goods Sold') || a.AccountType === 'Cost of Goods Sold'
-    );
-
     const qbItem = await createQBItem({
       Name: sku,
       Description: description,
-      Type: 'Inventory',
+      Type: 'NonInventory',
       UnitPrice: price || 0,
-      PurchaseCost: cost || 0,
-      QtyOnHand: quantity_on_hand || 0,
-      InvStartDate: inv_start_date || new Date().toISOString().split('T')[0],
-      IncomeAccountRef: incomeAccount
-        ? { value: incomeAccount.Id, name: 'Sales of Product Income' }
-        : { name: 'Sales of Product Income' },
-      AssetAccountRef: assetAccount
-        ? { value: assetAccount.Id, name: 'Inventory Asset' }
-        : { name: 'Inventory Asset' },
-      ExpenseAccountRef: expenseAccount
-        ? { value: expenseAccount.Id, name: 'Cost of Goods Sold' }
-        : { name: 'Cost of Goods Sold' },
     });
 
     if (qbItem && qbItem.Id) {
