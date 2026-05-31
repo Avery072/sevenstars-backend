@@ -2,7 +2,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const OAuthClient = require('intuit-oauth');
 const pool = require('../config/db');
-const { oauthClient, saveTokens } = require('../config/quickbooks');
+const { oauthClient, saveTokens, getStoredTokens } = require('../config/quickbooks');
 
 async function login(req, res) {
   const { username, password } = req.body;
@@ -55,4 +55,22 @@ async function qbOAuthCallback(req, res) {
   }
 }
 
-module.exports = { login, startQBOAuth, qbOAuthCallback };
+async function qbStatus(req, res) {
+  const stored = await getStoredTokens();
+  if (!stored) {
+    return res.json({
+      tokens_exist: false,
+      expires_at: null,
+      currently_valid: false,
+    });
+  }
+
+  const expiresAt = new Date(stored.expires_at);
+  res.json({
+    tokens_exist: true,
+    expires_at: expiresAt.toISOString(),
+    currently_valid: Date.now() < expiresAt.getTime(),
+  });
+}
+
+module.exports = { login, startQBOAuth, qbOAuthCallback, qbStatus };
