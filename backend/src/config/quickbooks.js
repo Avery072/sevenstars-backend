@@ -26,10 +26,42 @@ async function saveTokens({ realmId, accessToken, refreshToken, expiresAt }) {
   );
 }
 
+function getQBErrorMessage(err) {
+  const message = err.response?.data ? JSON.stringify(err.response.data) : err.message || 'Unknown QB token refresh error';
+  return message.replace(/please authorize again/ig, 'stored refresh token was rejected');
+}
+
+async function refreshStoredTokens(stored) {
+  let lastErr;
+  let tokenRow = stored;
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const authResponse = await oauthClient.refreshUsingToken(tokenRow.refresh_token);
+      const token = authResponse.getJson();
+
+      const newExpiresAt = new Date(Date.now() + token.expires_in * 1000);
+      await saveTokens({
+        realmId: tokenRow.realm_id,
+        accessToken: token.access_token,
+        refreshToken: token.refresh_token,
+        expiresAt: newExpiresAt,
+      });
+
+      return { accessToken: token.access_token, realmId: tokenRow.realm_id };
+    } catch (err) {
+      lastErr = err;
+      tokenRow = await getStoredTokens() || tokenRow;
+    }
+  }
+
+  throw new Error(`QB token refresh failed: ${getQBErrorMessage(lastErr)}`);
+}
+
 // Returns a valid access token, refreshing if expiry is within 5 minutes.
 async function getValidAccessToken() {
   const stored = await getStoredTokens();
-  if (!stored) throw new Error('No QB tokens stored. Re-authorize via /api/auth/qb');
+  if (!stored) throw new Error('No QB tokens stored');
 
   const expiresAt = new Date(stored.expires_at);
   const fiveMinutes = 5 * 60 * 1000;
@@ -38,26 +70,7 @@ async function getValidAccessToken() {
     return { accessToken: stored.access_token, realmId: stored.realm_id };
   }
 
-  // Refresh
-  oauthClient.setToken({
-    token_type: 'bearer',
-    access_token: stored.access_token,
-    refresh_token: stored.refresh_token,
-    realmId: stored.realm_id,
-  });
-
-  const authResponse = await oauthClient.refresh();
-  const token = authResponse.getJson();
-
-  const newExpiresAt = new Date(Date.now() + token.expires_in * 1000);
-  await saveTokens({
-    realmId: stored.realm_id,
-    accessToken: token.access_token,
-    refreshToken: token.refresh_token || stored.refresh_token,
-    expiresAt: newExpiresAt,
-  });
-
-  return { accessToken: token.access_token, realmId: stored.realm_id };
+  return refreshStoredTokens(stored);
 }
 
 module.exports = { oauthClient, getStoredTokens, saveTokens, getValidAccessToken };
