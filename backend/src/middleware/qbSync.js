@@ -4,9 +4,7 @@ const { getValidAccessToken } = require('../config/quickbooks');
 // Returns an axios instance pre-configured for the QBO API with a fresh token.
 async function getQBClient() {
   const { accessToken, realmId } = await getValidAccessToken();
-  const baseURL = process.env.NODE_ENV === 'production'
-    ? `https://quickbooks.api.intuit.com/v3/company/${realmId}`
-    : `https://sandbox-quickbooks.api.intuit.com/v3/company/${realmId}`;
+  const baseURL = `https://sandbox-quickbooks.api.intuit.com/v3/company/${realmId}`;
 
   return axios.create({
     baseURL,
@@ -48,9 +46,43 @@ async function createQBCustomer(customerPayload) {
   return data.Customer;
 }
 
+async function getQBAccounts() {
+  const client = await getQBClient();
+  const query = 'SELECT * FROM Account';
+  const { data } = await client.get(`/query?query=${encodeURIComponent(query)}&minorversion=75`);
+  return data?.QueryResponse?.Account || [];
+}
+
 async function createQBItem(itemPayload) {
   const client = await getQBClient();
-  const { data } = await client.post('/item?minorversion=65', itemPayload);
+  const accounts = await getQBAccounts();
+  const incomeAccount = accounts.find(a => a.Type === 'Income' || a.AccountType === 'Income');
+  const assetAccount = accounts.find(a =>
+    (a.Name || '').toLowerCase().includes('inventory') || a.AccountSubType === 'Inventory'
+  );
+  const cogsAccount = accounts.find(a =>
+    a.AccountType === 'Cost of Goods Sold' || (a.Name || '').toLowerCase().includes('cost')
+  );
+
+  const payload = {
+    ...itemPayload,
+    Type: 'NonInventory',
+  };
+
+  delete payload.IncomeAccountRef;
+  delete payload.AssetAccountRef;
+  delete payload.ExpenseAccountRef;
+
+  if (incomeAccount) {
+    payload.IncomeAccountRef = { value: incomeAccount.Id, name: incomeAccount.Name };
+  }
+
+  if (incomeAccount && assetAccount && cogsAccount) {
+    payload.AssetAccountRef = { value: assetAccount.Id, name: assetAccount.Name };
+    payload.ExpenseAccountRef = { value: cogsAccount.Id, name: cogsAccount.Name };
+  }
+
+  const { data } = await client.post('/item?minorversion=75', payload);
   return data.Item;
 }
 
@@ -108,5 +140,6 @@ module.exports = {
   appendToQBInvoice,
   createQBCustomer,
   createQBItem,
+  getQBAccounts,
   updateQBItem,
 };
