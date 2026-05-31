@@ -27,9 +27,6 @@ async function createProduct(req, res) {
       Description: description,
       Type: 'NonInventory',
       UnitPrice: price || 0,
-      IncomeAccountRef: { value: '1', name: 'Sales' },
-      AssetAccountRef: { value: '2', name: 'Inventory Asset' },
-      ExpenseAccountRef: { value: '3', name: 'Cost of Goods Sold' },
     });
 
     if (qbItem && qbItem.Id) {
@@ -37,7 +34,17 @@ async function createProduct(req, res) {
       result.rows[0].qb_item_id = qbItem.Id;
     }
   } catch (err) {
-    console.error('Failed to sync product to QuickBooks:', err);
+    const qbError = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+    console.error('QB item creation failed:', qbError);
+    result.rows[0].qb_item_id = 'ERROR: ' + qbError;
+    try {
+      await pool.query(
+        'UPDATE products SET qb_item_id = $1 WHERE id = $2',
+        [result.rows[0].qb_item_id, result.rows[0].id]
+      );
+    } catch (dbErr) {
+      console.error('Failed to store QB item creation error:', dbErr.message);
+    }
   }
 
   res.status(201).json(result.rows[0]);
