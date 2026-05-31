@@ -523,6 +523,7 @@ let allProducts = [], allCustomers = [], allOrders = [];
 let productDeleteMode = false;
 let selectedProductIds = new Set();
 let productSearchQuery = '';
+let productSubmitting = false;
 
 /* ── Auth ── */
 async function doLogin() {
@@ -1152,6 +1153,7 @@ async function submitCustomer() {
 }
 
 async function submitNewProduct() {
+  if (productSubmitting) return;
   const errEl = document.getElementById('product-err');
   errEl.style.display = 'none';
 
@@ -1175,18 +1177,25 @@ async function submitNewProduct() {
     show_price: document.getElementById('np-show-price').checked,
   };
 
-  const res = await api('/api/products', { method: 'POST', body: JSON.stringify(body) });
+  productSubmitting = true;
+  try {
+    const res = await api('/api/products', { method: 'POST', body: JSON.stringify(body) });
 
-  if (res && res.id) {
-    closeModal('modal-product');
-    ['np-sku','np-description','np-unit','np-category','np-vendor',
-     'np-cost','np-price','np-reorder'].forEach(id => document.getElementById(id).value = '');
-    document.getElementById('np-show-price').checked = true;
-    allProducts = await api('/api/products') || allProducts;
-    renderProducts();
-    updateStats();
-  } else {
-    showErr(errEl, (res && res.error) || 'Failed to create product');
+    if (res && res.id) {
+      allProducts = await api('/api/products') || allProducts;
+      renderProducts(productSearchQuery);
+      updateStats();
+      closeModal('modal-product');
+      ['np-sku','np-description','np-unit','np-category','np-vendor',
+       'np-cost','np-price','np-reorder'].forEach(id => document.getElementById(id).value = '');
+      document.getElementById('np-show-price').checked = true;
+    } else {
+      showErr(errEl, (res && res.error) || 'Failed to create product');
+    }
+  } catch(e) {
+    showErr(errEl, 'Failed to create product');
+  } finally {
+    productSubmitting = false;
   }
 }
 
