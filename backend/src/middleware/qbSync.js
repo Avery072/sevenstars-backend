@@ -47,6 +47,8 @@ async function createQBCustomer(customerPayload) {
 }
 
 async function getQBAccounts() {
+  const { realmId } = await getValidAccessToken();
+  console.log('getQBAccounts called, realmId:', realmId);
   const client = await getQBClient();
   const query = 'SELECT * FROM Account';
   const { data } = await client.get(`/query?query=${encodeURIComponent(query)}&minorversion=75`);
@@ -54,6 +56,7 @@ async function getQBAccounts() {
 }
 
 async function createQBItem(itemPayload) {
+  console.log('createQBItem called with:', JSON.stringify(itemPayload));
   const client = await getQBClient();
   const accounts = await getQBAccounts();
   const incomeAccount = accounts.find(a => a.Type === 'Income' || a.AccountType === 'Income');
@@ -83,6 +86,7 @@ async function createQBItem(itemPayload) {
   }
 
   const { data } = await client.post('/item?minorversion=75', payload);
+  console.log('QB createItem raw response:', JSON.stringify(data));
   return data.Item;
 }
 
