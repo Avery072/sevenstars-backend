@@ -273,7 +273,7 @@
             <input class="search-input" placeholder="Search..." oninput="renderProducts(this.value)">
           </div>
           <table>
-            <thead><tr><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Status</th><th>Action</th></tr></thead>
+            <thead><tr><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Action</th><th>Status</th></tr></thead>
             <tbody id="product-body">
               <tr><td colspan="8" class="empty-state">Loading...</td></tr>
             </tbody>
@@ -704,8 +704,8 @@ function renderProducts(q = '') {
       <td class="mono">${product.cost ? '$'+parseFloat(product.cost).toFixed(2) : '—'}</td>
       <td class="mono">${price}</td>
       <td class="mono">${product.quantity_on_hand ?? '—'}</td>
+      <td><button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="deleteProduct(${product.id}, ${JSON.stringify(product.sku)})">✕ DELETE</button></td>
       <td>${status}${qbBadge}</td>
-      <td><button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="deleteProduct(${product.id}, '${product.sku}')">✕ DELETE</button></td>
     </tr>`;
   }).join('') : '<tr><td colspan="8" class="empty-state">No products found.</td></tr>';
 }
