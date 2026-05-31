@@ -1,5 +1,5 @@
 const pool = require('../config/db');
-const { createQBItem } = require('../middleware/qbSync');
+const { createQBItem, deleteQBItem } = require('../middleware/qbSync');
 
 async function listProducts(req, res) {
   const result = await pool.query(
@@ -98,11 +98,15 @@ async function deleteProduct(req, res) {
   const { id } = req.params;
 
   const result = await pool.query(
-    'UPDATE products SET active = FALSE, updated_at = NOW() WHERE id = $1 RETURNING id',
+    'UPDATE products SET active = FALSE, updated_at = NOW() WHERE id = $1 RETURNING id, qb_item_id',
     [id]
   );
 
   if (!result.rows.length) return res.status(404).json({ error: 'Product not found' });
+  const product = result.rows[0];
+  if (product.qb_item_id && !product.qb_item_id.startsWith('ERROR:')) {
+    await deleteQBItem(product.qb_item_id);
+  }
   res.json({ message: 'Product deactivated' });
 }
 

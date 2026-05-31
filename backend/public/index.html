@@ -270,12 +270,15 @@
           <div class="table-header">
             <div class="table-title">Product Catalog</div>
             <div class="table-count" id="product-count">— items</div>
+            <button class="action-btn" id="product-delete-toggle" onclick="toggleProductDeleteMode()">DELETE PRODUCTS</button>
+            <button class="action-btn" id="product-delete-confirm" onclick="confirmDeleteProducts()" style="display:none;background:var(--red);color:white;border-color:var(--red-dark);">CONFIRM DELETE (0)</button>
+            <span id="product-delete-msg" style="display:none;font-size:11px;color:var(--gray-dark);font-weight:bold;"></span>
             <input class="search-input" placeholder="Search..." oninput="renderProducts(this.value)">
           </div>
           <table>
-            <thead><tr><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Action</th><th>Status</th></tr></thead>
+            <thead id="product-head"><tr><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Status</th></tr></thead>
             <tbody id="product-body">
-              <tr><td colspan="8" class="empty-state">Loading...</td></tr>
+              <tr><td colspan="7" class="empty-state">Loading...</td></tr>
             </tbody>
           </table>
         </div>
@@ -517,6 +520,9 @@
 <script>
 let token = localStorage.getItem('ss_token');
 let allProducts = [], allCustomers = [], allOrders = [];
+let productDeleteMode = false;
+let selectedProductIds = new Set();
+let productSearchQuery = '';
 
 /* ── Auth ── */
 async function doLogin() {
@@ -574,6 +580,51 @@ async function api(path, opts = {}) {
   });
   if (res.status === 401) { logout(); return null; }
   return res.json();
+}
+
+function updateProductDeleteControls() {
+  const toggle = document.getElementById('product-delete-toggle');
+  const confirmBtn = document.getElementById('product-delete-confirm');
+  const count = selectedProductIds.size;
+  toggle.textContent = productDeleteMode ? 'CANCEL' : 'DELETE PRODUCTS';
+  confirmBtn.style.display = productDeleteMode ? '' : 'none';
+  confirmBtn.textContent = `CONFIRM DELETE (${count})`;
+  confirmBtn.disabled = count === 0;
+}
+
+function toggleProductDeleteMode() {
+  productDeleteMode = !productDeleteMode;
+  selectedProductIds.clear();
+  document.getElementById('product-delete-msg').style.display = 'none';
+  updateProductDeleteControls();
+  renderProducts(productSearchQuery);
+}
+
+function toggleProductSelection(id, el) {
+  if (el.checked) selectedProductIds.add(id);
+  else selectedProductIds.delete(id);
+  updateProductDeleteControls();
+}
+
+async function confirmDeleteProducts() {
+  const count = selectedProductIds.size;
+  if (!count) return;
+  if (!confirm('Delete ' + count + ' products? This cannot be undone.')) return;
+
+  for (const id of selectedProductIds) {
+    await api('/api/products/' + id, { method: 'DELETE' });
+  }
+
+  productDeleteMode = false;
+  selectedProductIds.clear();
+  allProducts = await api('/api/products') || allProducts;
+  renderProducts(productSearchQuery);
+  updateStats();
+  updateProductDeleteControls();
+  const msg = document.getElementById('product-delete-msg');
+  msg.textContent = count + ' products deleted';
+  msg.style.display = '';
+  setTimeout(() => { msg.style.display = 'none'; }, 2500);
 }
 
 /* ── Load all data ── */
@@ -683,30 +734,17 @@ async function viewOrder(id) {
     </table>`;
 }
 
-async function deleteProduct(id) {
-  const product = allProducts.find(p => p.id === id);
-  const sku = product ? product.sku : 'this product';
-
-  if (!confirm('Delete ' + sku + '? This will remove it from the product list.')) return;
-
-  const res = await api('/api/products/' + id, { method: 'DELETE' });
-
-  if (res && res.message) {
-    allProducts = await api('/api/products') || allProducts;
-    renderProducts();
-    updateStats();
-  } else {
-    alert((res && res.error) || 'Failed to delete product');
-  }
-}
-
 /* ── Products ── */
 function renderProducts(q = '') {
+  productSearchQuery = q;
   const list = q ? allProducts.filter(p =>
     p.description.toLowerCase().includes(q.toLowerCase()) ||
     p.sku.toLowerCase().includes(q.toLowerCase())
   ) : allProducts;
   document.getElementById('product-count').textContent = list.length + ' items';
+  document.getElementById('product-head').innerHTML = productDeleteMode
+    ? '<tr><th style="width:32px;"></th><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Status</th></tr>'
+    : '<tr><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Status</th></tr>';
   document.getElementById('product-body').innerHTML = list.length ? list.map(product => {
     const status = !product.active ? '<span class="badge badge-gray">INACTIVE</span>'
       : product.quantity_on_hand <= 0 ? '<span class="badge badge-red">OUT OF STOCK</span>'
@@ -715,16 +753,17 @@ function renderProducts(q = '') {
     const qbBadge = product.qb_item_id ? '' : ' <span class="badge badge-gray" title="Not linked to QuickBooks — add this product in QB then run Sync from QB">NO QB</span>';
     const price = product.show_price ? '$'+parseFloat(product.price||0).toFixed(2) : '<span style="color:var(--gray-dark);font-style:italic;">Market</span>';
     return `<tr>
+      ${productDeleteMode ? `<td style="text-align:center;"><input type="checkbox" style="width:auto;" ${selectedProductIds.has(product.id) ? 'checked' : ''} onchange="toggleProductSelection(${product.id}, this)"></td>` : ''}
       <td class="mono" style="font-size:11px;">${product.sku}</td>
       <td>${product.description}</td>
       <td class="mono">${product.unit}</td>
       <td class="mono">${product.cost ? '$'+parseFloat(product.cost).toFixed(2) : '—'}</td>
       <td class="mono">${price}</td>
       <td class="mono">${product.quantity_on_hand ?? '—'}</td>
-      <td><button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="deleteProduct(${product.id})">✕ DELETE</button></td>
       <td>${status}${qbBadge}</td>
     </tr>`;
-  }).join('') : '<tr><td colspan="8" class="empty-state">No products found.</td></tr>';
+  }).join('') : `<tr><td colspan="${productDeleteMode ? 8 : 7}" class="empty-state">No products found.</td></tr>`;
+  updateProductDeleteControls();
 }
 
 /* ── Customers ── */
