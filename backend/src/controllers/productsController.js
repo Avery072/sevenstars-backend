@@ -1,5 +1,5 @@
 const pool = require('../config/db');
-const { createQBItem, deleteQBItem } = require('../middleware/qbSync');
+const { createQBItem, deleteQBItem, getQBAccounts } = require('../middleware/qbSync');
 
 async function listProducts(req, res) {
   const result = await pool.query(
@@ -9,41 +9,109 @@ async function listProducts(req, res) {
 }
 
 async function createProduct(req, res) {
-  const { sku, description, category, unit, cost, price, show_price, reorder_point, vendor } = req.body;
+  const {
+    sku,
+    description,
+    category,
+    unit,
+    cost,
+    price,
+    show_price,
+    reorder_point,
+    vendor,
+    quantity_on_hand,
+    inv_start_date,
+  } = req.body;
 
   if (!sku || !description || !unit) {
     return res.status(400).json({ error: 'sku, description, and unit are required' });
   }
 
   const result = await pool.query(
-    `INSERT INTO products (sku, description, category, unit, cost, price, show_price, reorder_point, vendor)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-    [sku, description, category, unit, cost, price, show_price ?? true, reorder_point, vendor]
+    `INSERT INTO products (sku, description, category, unit, cost, price, show_price, reorder_point, vendor, quantity_on_hand)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+    [
+      sku,
+      description,
+      category,
+      unit,
+      cost,
+      price,
+      show_price ?? true,
+      reorder_point,
+      vendor,
+      quantity_on_hand || 0,
+    ]
   );
 
   try {
-    const qbItem = await createQBItem({
+    const accounts = await getQBAccounts();
+    const incomeAccount = accounts.find(a =>
+      (a.Name || '').includes('Sales of Product Income') || a.AccountType === 'Income'
+    );
+    const assetAccount = accounts.find(a =>
+      (a.Name || '').includes('Inventory Asset') || a.AccountSubType === 'Inventory'
+    );
+    const expenseAccount = accounts.find(a =>
+      (a.Name || '').includes('Cost of Goods Sold') || a.AccountType === 'Cost of Goods Sold'
+    );
+    const incomeAccountRef = incomeAccount
+      ? { value: incomeAccount.Id, name: incomeAccount.Name }
+      : undefined;
+
+    const inventoryPayload = {
       Name: sku,
       Description: description,
-      Type: 'NonInventory',
+      Type: 'Inventory',
       UnitPrice: price || 0,
+      PurchaseCost: cost || 0,
+      QtyOnHand: quantity_on_hand || 0,
+      InvStartDate: inv_start_date || new Date().toISOString().split('T')[0],
+      IncomeAccountRef: incomeAccountRef,
+      AssetAccountRef: assetAccount
+        ? { value: assetAccount.Id, name: assetAccount.Name }
+        : undefined,
+      ExpenseAccountRef: expenseAccount
+        ? { value: expenseAccount.Id, name: expenseAccount.Name }
+        : undefined,
+    };
+
+    const qbItem = await createQBItem({
+      ...inventoryPayload,
     });
 
     if (qbItem && qbItem.Id) {
       await pool.query('UPDATE products SET qb_item_id = $1 WHERE id = $2', [qbItem.Id, result.rows[0].id]);
       result.rows[0].qb_item_id = qbItem.Id;
     }
-  } catch (err) {
-    const qbError = err.response?.data ? JSON.stringify(err.response.data) : err.message;
-    console.error('QB item creation failed:', qbError);
-    result.rows[0].qb_item_id = 'ERROR: ' + qbError;
+  } catch (inventoryErr) {
+    const inventoryError = inventoryErr.response?.data ? JSON.stringify(inventoryErr.response.data) : inventoryErr.message;
+    console.error('QB Inventory item creation failed, retrying as NonInventory:', inventoryError);
+
     try {
-      await pool.query(
-        'UPDATE products SET qb_item_id = $1 WHERE id = $2',
-        [result.rows[0].qb_item_id, result.rows[0].id]
-      );
-    } catch (dbErr) {
-      console.error('Failed to store QB item creation error:', dbErr.message);
+      const qbItem = await createQBItem({
+        Name: sku,
+        Description: description,
+        Type: 'NonInventory',
+        UnitPrice: price || 0,
+      });
+
+      if (qbItem && qbItem.Id) {
+        await pool.query('UPDATE products SET qb_item_id = $1 WHERE id = $2', [qbItem.Id, result.rows[0].id]);
+        result.rows[0].qb_item_id = qbItem.Id;
+      }
+    } catch (err) {
+      const qbError = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+      console.error('QB item creation failed:', qbError);
+      result.rows[0].qb_item_id = 'ERROR: ' + qbError;
+      try {
+        await pool.query(
+          'UPDATE products SET qb_item_id = $1 WHERE id = $2',
+          [result.rows[0].qb_item_id, result.rows[0].id]
+        );
+      } catch (dbErr) {
+        console.error('Failed to store QB item creation error:', dbErr.message);
+      }
     }
   }
 
