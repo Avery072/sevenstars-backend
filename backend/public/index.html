@@ -273,9 +273,9 @@
             <input class="search-input" placeholder="Search..." oninput="renderProducts(this.value)">
           </div>
           <table>
-            <thead><tr><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Status</th></tr></thead>
+            <thead><tr><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Status</th><th>Action</th></tr></thead>
             <tbody id="product-body">
-              <tr><td colspan="7" class="empty-state">Loading...</td></tr>
+              <tr><td colspan="8" class="empty-state">Loading...</td></tr>
             </tbody>
           </table>
         </div>
@@ -690,23 +690,24 @@ function renderProducts(q = '') {
     p.sku.toLowerCase().includes(q.toLowerCase())
   ) : allProducts;
   document.getElementById('product-count').textContent = list.length + ' items';
-  document.getElementById('product-body').innerHTML = list.length ? list.map(p => {
-    const status = !p.active ? '<span class="badge badge-gray">INACTIVE</span>'
-      : p.quantity_on_hand <= 0 ? '<span class="badge badge-red">OUT OF STOCK</span>'
-      : p.reorder_point && p.quantity_on_hand <= p.reorder_point ? '<span class="badge badge-amber">LOW</span>'
+  document.getElementById('product-body').innerHTML = list.length ? list.map(product => {
+    const status = !product.active ? '<span class="badge badge-gray">INACTIVE</span>'
+      : product.quantity_on_hand <= 0 ? '<span class="badge badge-red">OUT OF STOCK</span>'
+      : product.reorder_point && product.quantity_on_hand <= product.reorder_point ? '<span class="badge badge-amber">LOW</span>'
       : '<span class="badge badge-green">ACTIVE</span>';
-    const qbBadge = p.qb_item_id ? '' : ' <span class="badge badge-gray" title="Not linked to QuickBooks — add this product in QB then run Sync from QB">NO QB</span>';
-    const price = p.show_price ? '$'+parseFloat(p.price||0).toFixed(2) : '<span style="color:var(--gray-dark);font-style:italic;">Market</span>';
+    const qbBadge = product.qb_item_id ? '' : ' <span class="badge badge-gray" title="Not linked to QuickBooks — add this product in QB then run Sync from QB">NO QB</span>';
+    const price = product.show_price ? '$'+parseFloat(product.price||0).toFixed(2) : '<span style="color:var(--gray-dark);font-style:italic;">Market</span>';
     return `<tr>
-      <td class="mono" style="font-size:11px;">${p.sku}</td>
-      <td>${p.description}</td>
-      <td class="mono">${p.unit}</td>
-      <td class="mono">${p.cost ? '$'+parseFloat(p.cost).toFixed(2) : '—'}</td>
+      <td class="mono" style="font-size:11px;">${product.sku}</td>
+      <td>${product.description}</td>
+      <td class="mono">${product.unit}</td>
+      <td class="mono">${product.cost ? '$'+parseFloat(product.cost).toFixed(2) : '—'}</td>
       <td class="mono">${price}</td>
-      <td class="mono">${p.quantity_on_hand ?? '—'}</td>
+      <td class="mono">${product.quantity_on_hand ?? '—'}</td>
       <td>${status}${qbBadge}</td>
+      <td><button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="deleteProduct(${product.id}, '${product.sku}')">✕ DELETE</button></td>
     </tr>`;
-  }).join('') : '<tr><td colspan="7" class="empty-state">No products found.</td></tr>';
+  }).join('') : '<tr><td colspan="8" class="empty-state">No products found.</td></tr>';
 }
 
 /* ── Customers ── */
@@ -1130,6 +1131,20 @@ async function submitNewProduct() {
     updateStats();
   } else {
     showErr(errEl, (res && res.error) || 'Failed to create product');
+  }
+}
+
+async function deleteProduct(id, sku) {
+  if (!confirm(`Delete ${sku}? This will remove it from the product list.`)) return;
+
+  const res = await api(`/api/products/${id}`, { method: 'DELETE' });
+
+  if (res && res.message) {
+    allProducts = await api('/api/products') || allProducts;
+    renderProducts();
+    updateStats();
+  } else {
+    alert((res && res.error) || 'Failed to delete product');
   }
 }
 
