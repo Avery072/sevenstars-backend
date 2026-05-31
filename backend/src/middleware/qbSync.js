@@ -90,6 +90,23 @@ async function createQBItem(itemPayload) {
   return data.Item;
 }
 
+async function deleteQBItem(qbItemId) {
+  try {
+    const client = await getQBClient();
+    const { data } = await client.get(`/item/${qbItemId}?minorversion=75`);
+    const item = data.Item;
+    await client.post('/item?minorversion=75', {
+      Id: item.Id,
+      SyncToken: item.SyncToken,
+      Active: false,
+      sparse: true,
+    });
+  } catch (err) {
+    const qbError = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+    console.error('QB item delete failed:', qbError);
+  }
+}
+
 // Fetches an existing QB invoice and appends new line items to it.
 // Must send the full invoice object (not sparse) so QB replaces the Line array correctly.
 // Auto-generated lines (SubTotal, Discount) are stripped — QB recalculates them.
@@ -144,6 +161,7 @@ module.exports = {
   appendToQBInvoice,
   createQBCustomer,
   createQBItem,
+  deleteQBItem,
   getQBAccounts,
   updateQBItem,
 };
