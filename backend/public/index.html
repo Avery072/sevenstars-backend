@@ -704,7 +704,7 @@ function renderProducts(q = '') {
       <td class="mono">${product.cost ? '$'+parseFloat(product.cost).toFixed(2) : '—'}</td>
       <td class="mono">${price}</td>
       <td class="mono">${product.quantity_on_hand ?? '—'}</td>
-      <td><button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="deleteProduct(${product.id}, ${JSON.stringify(product.sku)})">✕ DELETE</button></td>
+      <td><button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick='deleteProduct(${product.id}, ${JSON.stringify(product.sku)})'>✕ DELETE</button></td>
       <td>${status}${qbBadge}</td>
     </tr>`;
   }).join('') : '<tr><td colspan="8" class="empty-state">No products found.</td></tr>';
