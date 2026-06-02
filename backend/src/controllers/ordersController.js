@@ -103,6 +103,13 @@ async function createOrder(req, res) {
   }
 }
 
+// Validates email format per RFC 822 (simplified)
+function isValidEmail(email) {
+  if (!email || typeof email !== 'string') return false;
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email.trim());
+}
+
 async function pushToQB(order, items) {
   const custResult = await pool.query(
     `SELECT c.qb_customer_id, c.company_name, c.first_name, c.last_name, c.phone,
@@ -136,14 +143,20 @@ async function pushToQB(order, items) {
     }
 
     if (!qbCustomerId) {
-      const qbCustomer = await createQBCustomer({
+      const qbCustomerPayload = {
         DisplayName: displayName,
         CompanyName: customer.company_name || null,
         GivenName: customer.first_name || null,
         FamilyName: customer.last_name || null,
-        PrimaryEmailAddr: customer.email ? { Address: customer.email } : undefined,
         PrimaryPhone: customer.phone ? { FreeFormNumber: customer.phone } : undefined,
-      });
+      };
+
+      // Only add email if it's valid
+      if (isValidEmail(customer.email)) {
+        qbCustomerPayload.PrimaryEmailAddr = { Address: customer.email };
+      }
+
+      const qbCustomer = await createQBCustomer(qbCustomerPayload);
       qbCustomerId = qbCustomer.Id;
       console.log(`Created QB customer ${qbCustomerId} for local customer ${order.customer_id}`);
     }
@@ -265,3 +278,4 @@ async function purgeOldOrders() {
 }
 
 module.exports = { listOrders, getOrder, createOrder, syncPendingInvoices, purgeOldOrders };
+
