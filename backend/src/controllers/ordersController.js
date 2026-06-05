@@ -211,6 +211,13 @@ async function pushToQB(order, items) {
   await pool.query('UPDATE orders SET qb_invoice_id = $1 WHERE id = $2', [invoiceId, order.id]);
 }
 
+async function deleteOrder(req, res) {
+  const { id } = req.params;
+  const result = await pool.query('DELETE FROM orders WHERE id = $1 RETURNING id', [id]);
+  if (!result.rows.length) return res.status(404).json({ error: 'Order not found' });
+  res.json({ message: 'Order deleted' });
+}
+
 // Finds all orders without a qb_invoice_id and retries the QB push.
 async function syncPendingInvoices(req, res) {
   const { rows: orders } = await pool.query(
@@ -264,4 +271,4 @@ async function purgeOldOrders() {
   }
 }
 
-module.exports = { listOrders, getOrder, createOrder, syncPendingInvoices, purgeOldOrders };
+module.exports = { listOrders, getOrder, createOrder, deleteOrder, syncPendingInvoices, purgeOldOrders };

@@ -456,6 +456,10 @@
       <button class="modal-close" onclick="closeModal('modal-order-detail')">X</button>
     </div>
     <div class="modal-body" id="detail-body">Loading...</div>
+    <div class="modal-footer">
+      <button class="btn btn-danger" id="detail-delete-btn" onclick="deleteCurrentOrder()" style="margin-right:auto;">&#10005; DELETE ORDER</button>
+      <button class="btn btn-outline" onclick="closeModal('modal-order-detail')">CLOSE</button>
+    </div>
   </div>
 </div>
 
@@ -530,6 +534,7 @@
 <script>
 let token = localStorage.getItem('ss_token');
 let allProducts = [], allCustomers = [], allOrders = [];
+let currentOrderId = null;
 let productDeleteMode = false;
 let selectedProductIds = new Set();
 let productSearchQuery = '';
@@ -722,6 +727,7 @@ function renderOrders() {
 }
 
 async function viewOrder(id) {
+  currentOrderId = id;
   openModal('modal-order-detail');
   document.getElementById('detail-body').innerHTML = 'Loading...';
   const order = await api(`/api/orders/${id}`);
@@ -743,6 +749,22 @@ async function viewOrder(id) {
       <thead><tr><th>Product</th><th>Qty</th><th>Unit Price</th><th>Notes</th></tr></thead>
       <tbody>${items || '<tr><td colspan="4" class="empty-state">No line items</td></tr>'}</tbody>
     </table>`;
+}
+
+async function deleteCurrentOrder() {
+  if (!currentOrderId) return;
+  if (!confirm('Delete this order? This cannot be undone.')) return;
+  const res = await api(`/api/orders/${currentOrderId}`, { method: 'DELETE' });
+  if (res && res.message) {
+    closeModal('modal-order-detail');
+    allOrders = allOrders.filter(o => o.id !== currentOrderId);
+    currentOrderId = null;
+    renderOrders();
+    updateStats();
+    checkPendingInvoices();
+  } else {
+    alert((res && res.error) || 'Failed to delete order');
+  }
 }
 
 /* ── Products ── */
