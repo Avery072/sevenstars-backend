@@ -276,9 +276,9 @@
             <input class="search-input" placeholder="Search..." oninput="renderProducts(this.value)">
           </div>
           <table>
-            <thead id="product-head"><tr><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Status</th></tr></thead>
+            <thead id="product-head"><tr><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody id="product-body">
-              <tr><td colspan="7" class="empty-state">Loading...</td></tr>
+              <tr><td colspan="8" class="empty-state">Loading...</td></tr>
             </tbody>
           </table>
         </div>
@@ -772,9 +772,22 @@ function renderProducts(q = '') {
       <td class="mono">${price}</td>
       <td class="mono">${product.quantity_on_hand ?? '—'}</td>
       <td>${status}${qbBadge}</td>
+      <td><button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="deleteProduct(${p.id},'${p.description.replace(/'/g,"\\'")}')">&#10005; DELETE</button></td>
     </tr>`;
   }).join('') : `<tr><td colspan="${productDeleteMode ? 8 : 7}" class="empty-state">No products found.</td></tr>`;
   updateProductDeleteControls();
+}
+
+async function deleteProduct(id, name) {
+  if (!confirm(`Delete "${name}"? It will be deactivated and hidden from the mobile app.`)) return;
+  const res = await api(`/api/products/${id}`, { method: 'DELETE' });
+  if (res && res.message) {
+    allProducts = allProducts.filter(p => p.id !== id);
+    renderProducts();
+    renderInventory();
+  } else {
+    alert((res && res.error) || 'Failed to delete product');
+  }
 }
 
 /* ── Customers ── */
