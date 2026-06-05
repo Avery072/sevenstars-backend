@@ -755,7 +755,7 @@ function renderProducts(q = '') {
   document.getElementById('product-count').textContent = list.length + ' items';
   document.getElementById('product-head').innerHTML = productDeleteMode
     ? '<tr><th style="width:32px;"></th><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Status</th></tr>'
-    : '<tr><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Status</th></tr>';
+    : '<tr><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Status</th><th>Actions</th></tr>';
   document.getElementById('product-body').innerHTML = list.length ? list.map(product => {
     const status = !product.active ? '<span class="badge badge-gray">INACTIVE</span>'
       : product.quantity_on_hand <= 0 ? '<span class="badge badge-red">OUT OF STOCK</span>'
@@ -772,7 +772,7 @@ function renderProducts(q = '') {
       <td class="mono">${price}</td>
       <td class="mono">${product.quantity_on_hand ?? '—'}</td>
       <td>${status}${qbBadge}</td>
-      <td><button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="deleteProduct(${p.id},'${p.description.replace(/'/g,"\\'")}')">&#10005; DELETE</button></td>
+      <td><button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="deleteProduct(${product.id},'${product.description.replace(/'/g,"\\'")}')">&#10005; DELETE</button></td>
     </tr>`;
   }).join('') : `<tr><td colspan="${productDeleteMode ? 8 : 7}" class="empty-state">No products found.</td></tr>`;
   updateProductDeleteControls();
