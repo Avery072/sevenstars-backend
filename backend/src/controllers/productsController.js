@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const { createQBItem, deleteQBItem, getQBAccounts } = require('../middleware/qbSync');
+const cloudinary = require('cloudinary').v2;
 
 async function listProducts(req, res) {
   const result = await pool.query(
@@ -178,4 +179,20 @@ async function deleteProduct(req, res) {
   res.json({ message: 'Product deactivated' });
 }
 
-module.exports = { listProducts, createProduct, updateProduct, toggleShowPrice, deleteProduct };
+async function uploadProductImage(req, res) {
+  const { id } = req.params;
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+  const result = await new Promise((resolve, reject) => {
+    cloudinary.uploader.upload_stream(
+      { folder: 'seven-stars-products', public_id: `product-${id}`, overwrite: true,
+        transformation: [{ width: 800, height: 800, crop: 'limit' }] },
+      (err, r) => { if (err) reject(err); else resolve(r); }
+    ).end(req.file.buffer);
+  });
+
+  await pool.query('UPDATE products SET image_url = $1, updated_at = NOW() WHERE id = $2', [result.secure_url, id]);
+  res.json({ image_url: result.secure_url });
+}
+
+module.exports = { listProducts, createProduct, updateProduct, toggleShowPrice, deleteProduct, uploadProductImage };

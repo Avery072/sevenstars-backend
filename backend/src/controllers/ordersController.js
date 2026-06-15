@@ -193,9 +193,23 @@ async function pushToQB(order, items) {
 
   let invoiceId;
   if (existing.rows.length) {
-    const updated = await appendToQBInvoice(existing.rows[0].qb_invoice_id, lines);
-    invoiceId = updated.Id;
-    console.log(`QB invoice ${invoiceId} updated — merged order ${order.id} into existing invoice`);
+    try {
+      const updated = await appendToQBInvoice(existing.rows[0].qb_invoice_id, lines);
+      invoiceId = updated.Id;
+      console.log(`QB invoice ${invoiceId} updated — merged order ${order.id} into existing invoice`);
+    } catch (appendErr) {
+      console.warn(`QB invoice ${existing.rows[0].qb_invoice_id} unreachable (deleted/voided in QB), creating new invoice. Error: ${appendErr.message}`);
+      await pool.query('UPDATE orders SET qb_invoice_id = NULL WHERE qb_invoice_id = $1', [existing.rows[0].qb_invoice_id]);
+      const payload = {
+        CustomerRef: { value: qbCustomerId },
+        TxnDate: order.delivery_date,
+        Line: lines,
+        ...(order.notes ? { CustomerMemo: { value: order.notes } } : {}),
+      };
+      const invoice = await createQBInvoice(payload);
+      invoiceId = invoice.Id;
+      console.log(`QB invoice ${invoiceId} created (fallback) for order ${order.id}`);
+    }
   } else {
     const payload = {
       CustomerRef: { value: qbCustomerId },

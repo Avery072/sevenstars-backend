@@ -9,7 +9,7 @@ router.use(requireCustomerAuth);
 // GET /api/mobile/products — active products; price hidden when show_price = false
 router.get('/products', async (req, res) => {
   const result = await pool.query(
-    `SELECT id, sku, description, category, unit, show_price,
+    `SELECT id, sku, description, category, unit, show_price, image_url,
             CASE WHEN show_price THEN price::text ELSE NULL END AS price
      FROM products
      WHERE active = true
@@ -160,9 +160,23 @@ async function pushToQB(order, items, productMap) {
 
   let invoiceId;
   if (existing.rows.length) {
-    const updated = await appendToQBInvoice(existing.rows[0].qb_invoice_id, lines);
-    invoiceId = updated.Id;
-    console.log(`QB invoice ${invoiceId} updated — merged mobile order ${order.id} into existing invoice`);
+    try {
+      const updated = await appendToQBInvoice(existing.rows[0].qb_invoice_id, lines);
+      invoiceId = updated.Id;
+      console.log(`QB invoice ${invoiceId} updated — merged mobile order ${order.id} into existing invoice`);
+    } catch (appendErr) {
+      console.warn(`QB invoice ${existing.rows[0].qb_invoice_id} unreachable (deleted/voided in QB), creating new invoice. Error: ${appendErr.message}`);
+      await pool.query('UPDATE orders SET qb_invoice_id = NULL WHERE qb_invoice_id = $1', [existing.rows[0].qb_invoice_id]);
+      const payload = {
+        CustomerRef: { value: qbCustomerId },
+        TxnDate: order.delivery_date,
+        Line: lines,
+        ...(order.notes ? { CustomerMemo: { value: order.notes } } : {}),
+      };
+      const invoice = await createQBInvoice(payload);
+      invoiceId = invoice.Id;
+      console.log(`QB invoice ${invoiceId} created (fallback) for mobile order ${order.id}`);
+    }
   } else {
     const payload = {
       CustomerRef: { value: qbCustomerId },

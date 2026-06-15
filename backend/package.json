@@ -10,6 +10,7 @@
   "dependencies": {
     "axios": "^1.7.2",
     "bcryptjs": "^2.4.3",
+    "cloudinary": "^2.10.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
@@ -17,6 +18,7 @@
     "helmet": "^7.1.0",
     "intuit-oauth": "^4.0.0",
     "jsonwebtoken": "^9.0.2",
+    "multer": "^2.1.1",
     "node-quickbooks": "^2.0.37",
     "pg": "^8.12.0"
   },

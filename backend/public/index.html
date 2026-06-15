@@ -278,7 +278,7 @@
           <table>
             <thead id="product-head"><tr><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody id="product-body">
-              <tr><td colspan="8" class="empty-state">Loading...</td></tr>
+              <tr><td colspan="7" class="empty-state">Loading...</td></tr>
             </tbody>
           </table>
         </div>
@@ -456,10 +456,6 @@
       <button class="modal-close" onclick="closeModal('modal-order-detail')">X</button>
     </div>
     <div class="modal-body" id="detail-body">Loading...</div>
-    <div class="modal-footer">
-      <button class="btn btn-danger" id="detail-delete-btn" onclick="deleteCurrentOrder()" style="margin-right:auto;">&#10005; DELETE ORDER</button>
-      <button class="btn btn-outline" onclick="closeModal('modal-order-detail')">CLOSE</button>
-    </div>
   </div>
 </div>
 
@@ -531,10 +527,11 @@
   </div>
 </div>
 
+<input type="file" id="img-file-input" accept="image/*" style="display:none;">
+
 <script>
 let token = localStorage.getItem('ss_token');
 let allProducts = [], allCustomers = [], allOrders = [];
-let currentOrderId = null;
 let productDeleteMode = false;
 let selectedProductIds = new Set();
 let productSearchQuery = '';
@@ -727,7 +724,6 @@ function renderOrders() {
 }
 
 async function viewOrder(id) {
-  currentOrderId = id;
   openModal('modal-order-detail');
   document.getElementById('detail-body').innerHTML = 'Loading...';
   const order = await api(`/api/orders/${id}`);
@@ -751,22 +747,6 @@ async function viewOrder(id) {
     </table>`;
 }
 
-async function deleteCurrentOrder() {
-  if (!currentOrderId) return;
-  if (!confirm('Delete this order? This cannot be undone.')) return;
-  const res = await api(`/api/orders/${currentOrderId}`, { method: 'DELETE' });
-  if (res && res.message) {
-    closeModal('modal-order-detail');
-    allOrders = allOrders.filter(o => o.id !== currentOrderId);
-    currentOrderId = null;
-    renderOrders();
-    updateStats();
-    checkPendingInvoices();
-  } else {
-    alert((res && res.error) || 'Failed to delete order');
-  }
-}
-
 /* ── Products ── */
 function renderProducts(q = '') {
   productSearchQuery = q;
@@ -776,7 +756,7 @@ function renderProducts(q = '') {
   ) : allProducts;
   document.getElementById('product-count').textContent = list.length + ' items';
   document.getElementById('product-head').innerHTML = productDeleteMode
-    ? '<tr><th style="width:32px;"></th><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Status</th></tr>'
+    ? '<tr><th style="width:32px;"></th><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Status</th><th>Actions</th></tr>'
     : '<tr><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Status</th><th>Actions</th></tr>';
   document.getElementById('product-body').innerHTML = list.length ? list.map(product => {
     const status = !product.active ? '<span class="badge badge-gray">INACTIVE</span>'
@@ -794,9 +774,12 @@ function renderProducts(q = '') {
       <td class="mono">${price}</td>
       <td class="mono">${product.quantity_on_hand ?? '—'}</td>
       <td>${status}${qbBadge}</td>
-      <td><button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="deleteProduct(${product.id},'${product.description.replace(/'/g,"\\'")}')">&#10005; DELETE</button></td>
+      <td style="white-space:nowrap;">
+        <button class="action-btn" onclick="triggerImageUpload(${product.id})" title="Upload image">&#128247;</button>
+        <button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="deleteProduct(${product.id},'${product.description.replace(/'/g,"\\'")}')">&#10005;</button>
+      </td>
     </tr>`;
-  }).join('') : `<tr><td colspan="${productDeleteMode ? 8 : 7}" class="empty-state">No products found.</td></tr>`;
+  }).join('') : `<tr><td colspan="${productDeleteMode ? 9 : 8}" class="empty-state">No products found.</td></tr>`;
   updateProductDeleteControls();
 }
 
@@ -810,6 +793,30 @@ async function deleteProduct(id, name) {
   } else {
     alert((res && res.error) || 'Failed to delete product');
   }
+}
+
+function triggerImageUpload(id) {
+  const input = document.getElementById('img-file-input');
+  input.onchange = async () => {
+    if (!input.files[0]) return;
+    const fd = new FormData();
+    fd.append('image', input.files[0]);
+    const res = await fetch(`/api/products/${id}/image`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` },
+      body: fd
+    });
+    const data = await res.json();
+    if (data.image_url) {
+      const p = allProducts.find(p => p.id === id);
+      if (p) p.image_url = data.image_url;
+      alert('Image uploaded!');
+    } else {
+      alert(data.error || 'Upload failed');
+    }
+    input.value = '';
+  };
+  input.click();
 }
 
 /* ── Customers ── */
