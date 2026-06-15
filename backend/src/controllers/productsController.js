@@ -33,6 +33,16 @@ async function createProduct(req, res) {
     return res.status(400).json({ error: 'sku, description, and unit are required' });
   }
 
+  const existing = await pool.query(
+    'SELECT id, sku, description FROM products WHERE LOWER(sku) = LOWER($1) OR LOWER(description) = LOWER($2)',
+    [sku, description]
+  );
+  if (existing.rows.length > 0) {
+    const dup = existing.rows[0];
+    const field = dup.sku.toLowerCase() === sku.toLowerCase() ? `SKU "${dup.sku}"` : `description "${dup.description}"`;
+    return res.status(409).json({ error: `A product with ${field} already exists` });
+  }
+
   const result = await pool.query(
     `INSERT INTO products (sku, description, category, unit, cost, price, show_price, reorder_point, vendor, quantity_on_hand)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,

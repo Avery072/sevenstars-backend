@@ -9,7 +9,7 @@ router.use(requireCustomerAuth);
 // GET /api/mobile/products — active products; price hidden when show_price = false
 router.get('/products', async (req, res) => {
   const result = await pool.query(
-    `SELECT id, sku, description, category, unit, show_price, image_url,
+    `SELECT id, sku, description, category, unit, show_price, image_url, quantity_on_hand,
             CASE WHEN show_price THEN price::text ELSE NULL END AS price
      FROM products
      WHERE active = true
