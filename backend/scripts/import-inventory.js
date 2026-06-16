@@ -14,7 +14,7 @@ const fs   = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
 
-const CSV_PATH = path.join(__dirname, '../../Item Lists with Frequent and Non-frequent.xlsm - ALL INVENTORY.csv');
+const CSV_PATH = path.join(__dirname, '../data/inventory.csv');
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 // Parse a single CSV line handling quoted fields
