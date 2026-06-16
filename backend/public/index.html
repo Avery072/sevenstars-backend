@@ -312,7 +312,7 @@
         <div class="table-card">
           <div class="table-header"><div class="table-title">Inventory Levels</div></div>
           <table>
-            <thead><tr><th>SKU</th><th>Product</th><th>Unit</th><th>Qty on Hand</th><th>Reorder Pt</th><th>Status</th></tr></thead>
+            <thead><tr><th>SKU</th><th>Product</th><th>Unit</th><th>Qty on Hand</th><th>Reorder Pt</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody id="inventory-body">
               <tr><td colspan="6" class="empty-state">Loading...</td></tr>
             </tbody>
@@ -869,15 +869,57 @@ function renderInventory() {
     const status = p.quantity_on_hand <= 0 ? '<span class="badge badge-red">OUT OF STOCK</span>'
       : p.reorder_point && p.quantity_on_hand <= p.reorder_point ? '<span class="badge badge-amber">LOW</span>'
       : '<span class="badge badge-green">IN STOCK</span>';
+    const oos = p.quantity_on_hand <= 0;
     return `<tr>
       <td class="mono" style="font-size:11px;">${p.sku}</td>
       <td>${p.description}</td>
       <td class="mono">${p.unit}</td>
-      <td class="mono">${p.quantity_on_hand ?? 0}</td>
+      <td class="mono">
+        <input type="number" step="0.01" value="${p.quantity_on_hand ?? 0}"
+          style="width:70px;padding:2px 5px;border:1px solid var(--border);font-family:Courier New,monospace;font-size:12px;background:#FFFFF0;"
+          onchange="updateQty(${p.id}, this.value, this)">
+      </td>
       <td class="mono">${p.reorder_point ?? '—'}</td>
-      <td>${status}</td>
+      <td id="inv-status-${p.id}">${status}</td>
+      <td>
+        <button class="action-btn" onclick="toggleOOS(${p.id}, ${oos})"
+          style="${oos ? 'background:#E2EFDA;color:#375623;border-color:#375623;' : 'background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);'}">
+          ${oos ? '&#10004; MARK IN STOCK' : 'MARK OUT OF STOCK'}
+        </button>
+      </td>
     </tr>`;
-  }).join('') || '<tr><td colspan="6" class="empty-state">No products.</td></tr>';
+  }).join('') || '<tr><td colspan="7" class="empty-state">No products.</td></tr>';
+}
+
+async function updateQty(id, value, inputEl) {
+  const qty = parseFloat(value);
+  if (isNaN(qty)) return;
+  const res = await api(`/api/products/${id}`, { method: 'PATCH', body: JSON.stringify({ quantity_on_hand: qty }) });
+  if (res && res.id) {
+    const p = allProducts.find(p => p.id === id);
+    if (p) p.quantity_on_hand = qty;
+    const statusEl = document.getElementById(`inv-status-${id}`);
+    if (statusEl) {
+      statusEl.innerHTML = qty <= 0 ? '<span class="badge badge-red">OUT OF STOCK</span>'
+        : p.reorder_point && qty <= p.reorder_point ? '<span class="badge badge-amber">LOW</span>'
+        : '<span class="badge badge-green">IN STOCK</span>';
+    }
+  } else {
+    alert('Failed to update quantity');
+    inputEl.value = allProducts.find(p => p.id === id)?.quantity_on_hand ?? 0;
+  }
+}
+
+async function toggleOOS(id, currentlyOOS) {
+  const newQty = currentlyOOS ? 1 : 0;
+  const res = await api(`/api/products/${id}`, { method: 'PATCH', body: JSON.stringify({ quantity_on_hand: newQty }) });
+  if (res && res.id) {
+    const p = allProducts.find(p => p.id === id);
+    if (p) p.quantity_on_hand = newQty;
+    renderInventory();
+  } else {
+    alert('Failed to update stock status');
+  }
 }
 
 /* ── Packing Report ── */
