@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { login, startQBOAuth, qbOAuthCallback, qbStatus } = require('../controllers/authController');
-const { customerLogin, customerSignup, customerMe } = require('../controllers/customerAuthController');
+const { customerLogin, customerSignup, customerMe, checkCompany } = require('../controllers/customerAuthController');
 const { requireCustomerAuth } = require('../middleware/auth');
 
 // Admin auth
@@ -14,5 +14,6 @@ router.get('/qb-status', qbStatus);
 router.post('/customer-login', customerLogin);
 router.post('/customer-signup', customerSignup);
 router.get('/customer-me', requireCustomerAuth, customerMe);
+router.get('/check-company', checkCompany);
 
 module.exports = router;

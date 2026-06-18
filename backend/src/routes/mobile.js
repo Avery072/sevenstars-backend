@@ -192,6 +192,49 @@ async function pushToQB(order, items, productMap) {
   await pool.query('UPDATE orders SET qb_invoice_id = $1 WHERE id = $2', [invoiceId, order.id]);
 }
 
-// Salmon cut preferences are admin-only — removed from mobile API
+// Salmon cut preferences set at signup only — not editable by mobile users after that
+
+// ── Sub-user management (main user only) ──────────────────────────────────────
+
+function requireMainUser(req, res, next) {
+  if (!req.user.is_main) return res.status(403).json({ error: 'Only the main account user can manage team members' });
+  next();
+}
+
+// GET /api/mobile/pending-users — pending sub-accounts awaiting main user approval
+router.get('/pending-users', requireMainUser, async (req, res) => {
+  const result = await pool.query(
+    `SELECT id, name, email, created_at
+     FROM mobile_users
+     WHERE customer_id = $1 AND active = FALSE AND is_main = FALSE
+     ORDER BY created_at ASC`,
+    [req.user.customer_id]
+  );
+  res.json(result.rows);
+});
+
+// POST /api/mobile/approve-user/:id
+router.post('/approve-user/:id', requireMainUser, async (req, res) => {
+  const result = await pool.query(
+    `UPDATE mobile_users SET active = TRUE
+     WHERE id = $1 AND customer_id = $2 AND is_main = FALSE
+     RETURNING id, name, email`,
+    [req.params.id, req.user.customer_id]
+  );
+  if (!result.rows.length) return res.status(404).json({ error: 'User not found or already approved' });
+  res.json({ message: `${result.rows[0].name || result.rows[0].email} approved` });
+});
+
+// POST /api/mobile/reject-user/:id
+router.post('/reject-user/:id', requireMainUser, async (req, res) => {
+  const result = await pool.query(
+    `DELETE FROM mobile_users
+     WHERE id = $1 AND customer_id = $2 AND is_main = FALSE AND active = FALSE
+     RETURNING name, email`,
+    [req.params.id, req.user.customer_id]
+  );
+  if (!result.rows.length) return res.status(404).json({ error: 'User not found' });
+  res.json({ message: `${result.rows[0].name || result.rows[0].email} rejected` });
+});
 
 module.exports = router;
