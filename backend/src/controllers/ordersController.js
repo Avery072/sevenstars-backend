@@ -124,7 +124,7 @@ async function pushToQB(order, items) {
     // Search QB first — avoid duplicate name error if customer already exists there
     try {
       const qbClient = await getQBClient();
-      const q = `SELECT * FROM Customer WHERE DisplayName = '${displayName.replace(/'/g, "\\'")}'`;
+      const q = `SELECT * FROM Customer WHERE DisplayName = '${displayName.replace(/'/g, "''")}'`;
       const { data } = await qbClient.get(`/query?query=${encodeURIComponent(q)}&minorversion=65`);
       const existing = data?.QueryResponse?.Customer?.[0];
       if (existing) {

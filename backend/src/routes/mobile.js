@@ -103,7 +103,7 @@ async function pushToQB(order, items, productMap) {
 
     try {
       const qbClient = await getQBClient();
-      const q = `SELECT * FROM Customer WHERE DisplayName = '${displayName.replace(/'/g, "\\'")}'`;
+      const q = `SELECT * FROM Customer WHERE DisplayName = '${displayName.replace(/'/g, "''")}'`;
       const { data } = await qbClient.get(`/query?query=${encodeURIComponent(q)}&minorversion=65`);
       const existing = data?.QueryResponse?.Customer?.[0];
       if (existing) {
@@ -192,35 +192,6 @@ async function pushToQB(order, items, productMap) {
   await pool.query('UPDATE orders SET qb_invoice_id = $1 WHERE id = $2', [invoiceId, order.id]);
 }
 
-// PATCH /api/mobile/profile — update company-level salmon cut preferences
-// Writes to the customers table so every user under the same company is updated
-router.patch('/profile', async (req, res) => {
-  const customer_id = req.user.customer_id;
-  const { salmon_cut, skin_off, scale, pbo, hg } = req.body;
-
-  const allowed = { salmon_cut, skin_off, scale, pbo, hg };
-  const sets = [];
-  const values = [];
-  let idx = 1;
-
-  for (const [key, val] of Object.entries(allowed)) {
-    if (val !== undefined) {
-      sets.push(`${key} = $${idx++}`);
-      values.push(val);
-    }
-  }
-
-  if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
-
-  values.push(customer_id);
-  const result = await pool.query(
-    `UPDATE customers SET ${sets.join(', ')} WHERE id = $${idx} RETURNING
-       id, salmon_cut, skin_off, scale, pbo, hg`,
-    values
-  );
-
-  if (!result.rows.length) return res.status(404).json({ error: 'Customer not found' });
-  res.json(result.rows[0]);
-});
+// Salmon cut preferences are admin-only — removed from mobile API
 
 module.exports = router;

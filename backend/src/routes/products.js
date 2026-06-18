@@ -9,14 +9,6 @@ const {
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
-// TEMPORARY DEBUG ROUTE - REMOVE BEFORE PRODUCTION
-router.get('/qb-debug', async (req, res) => {
-  const result = await pool.query(
-    'SELECT id, sku, description, qb_item_id FROM products ORDER BY id DESC LIMIT 5'
-  );
-  res.json(result.rows);
-});
-
 router.use(requireAuth);
 
 router.get('/', listProducts);

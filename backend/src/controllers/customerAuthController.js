@@ -28,12 +28,12 @@ async function customerLogin(req, res) {
   }
 
   const token = jwt.sign(
-    { user_id: user.id, customer_id: user.customer_id, company_name: user.company_name },
+    { user_id: user.id, customer_id: user.customer_id, company_name: user.company_name, is_main: user.is_main },
     process.env.JWT_SECRET,
     { expiresIn: '8h' }
   );
 
-  res.json({ token, company_name: user.company_name, name: user.name, customer_id: user.customer_id });
+  res.json({ token, company_name: user.company_name, name: user.name, customer_id: user.customer_id, is_main: user.is_main });
 }
 
 // POST /api/auth/customer-signup
@@ -62,11 +62,11 @@ async function customerSignup(req, res) {
     );
     const customer_id = customerResult.rows[0].id;
 
-    // Create mobile user (also inactive)
+    // First account for this customer record is the main user
     const hash = await bcrypt.hash(password, 10);
     await client.query(
-      `INSERT INTO mobile_users (customer_id, email, password_hash, name, active)
-       VALUES ($1, $2, $3, $4, FALSE)`,
+      `INSERT INTO mobile_users (customer_id, email, password_hash, name, active, is_main)
+       VALUES ($1, $2, $3, $4, FALSE, TRUE)`,
       [customer_id, email, hash, [first_name, last_name].filter(Boolean).join(' ') || null]
     );
 
@@ -74,6 +74,9 @@ async function customerSignup(req, res) {
     res.status(201).json({ message: 'Signup request submitted. You will be notified once approved.' });
   } catch (err) {
     await client.query('ROLLBACK');
+    if (err.code === '23505' && err.constraint?.includes('email')) {
+      return res.status(409).json({ error: 'An account with this email already exists' });
+    }
     throw err;
   } finally {
     client.release();
@@ -83,7 +86,7 @@ async function customerSignup(req, res) {
 // GET /api/auth/customer-me  — returns current user info from token
 async function customerMe(req, res) {
   const result = await pool.query(
-    `SELECT mu.id, mu.email, mu.name, c.company_name, c.id AS customer_id,
+    `SELECT mu.id, mu.email, mu.name, mu.is_main, c.company_name, c.id AS customer_id,
             c.salmon_cut, c.skin_off, c.scale, c.pbo, c.hg, c.language_pref
      FROM mobile_users mu
      JOIN customers c ON c.id = mu.customer_id
