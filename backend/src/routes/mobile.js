@@ -192,7 +192,27 @@ async function pushToQB(order, items, productMap) {
   await pool.query('UPDATE orders SET qb_invoice_id = $1 WHERE id = $2', [invoiceId, order.id]);
 }
 
-// Salmon cut preferences set at signup only — not editable by mobile users after that
+// PATCH /api/mobile/salmon-prefs — one-time set at signup; rejected if already saved
+router.patch('/salmon-prefs', async (req, res) => {
+  const { salmon_cut, skin_off, scale, pbo, hg } = req.body;
+  const { customer_id } = req.user;
+
+  const existing = await pool.query(
+    'SELECT salmon_cut FROM customers WHERE id = $1',
+    [customer_id]
+  );
+  if (!existing.rows.length) return res.status(404).json({ error: 'Customer not found' });
+  if (existing.rows[0].salmon_cut !== null) {
+    return res.status(409).json({ error: 'Salmon preferences already set. Contact admin to make changes.' });
+  }
+
+  const result = await pool.query(
+    `UPDATE customers SET salmon_cut = $1, skin_off = $2, scale = $3, pbo = $4, hg = $5
+     WHERE id = $6 RETURNING salmon_cut, skin_off, scale, pbo, hg`,
+    [salmon_cut || null, skin_off ?? false, scale ?? false, pbo ?? false, hg ?? false, customer_id]
+  );
+  res.json(result.rows[0]);
+});
 
 // ── Sub-user management (main user only) ──────────────────────────────────────
 

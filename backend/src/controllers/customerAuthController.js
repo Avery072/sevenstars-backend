@@ -56,7 +56,8 @@ async function checkCompany(req, res) {
 //   New company:      { company_name, first_name, last_name, email, password, phone, address, resale_certificate_number }
 //   Joining existing: { customer_id, first_name, last_name, email, password }
 async function customerSignup(req, res) {
-  const { customer_id, company_name, address, phone, first_name, last_name, email, password, resale_certificate_number } = req.body;
+  const { customer_id, company_name, address, phone, first_name, last_name, email, password, resale_certificate_number,
+          salmon_cut, skin_off, scale, pbo, hg } = req.body;
   const joiningExisting = !!customer_id;
 
   if (!email || !password) {
@@ -94,9 +95,11 @@ async function customerSignup(req, res) {
     } else {
       // New company: create customer row + main user
       const customerResult = await client.query(
-        `INSERT INTO customers (company_name, first_name, last_name, phone, address, resale_certificate_number, active)
-         VALUES ($1, $2, $3, $4, $5, $6, FALSE) RETURNING id`,
-        [company_name, first_name || null, last_name || null, phone || null, address || null, resale_certificate_number || null]
+        `INSERT INTO customers (company_name, first_name, last_name, phone, address, resale_certificate_number, active,
+                                salmon_cut, skin_off, scale, pbo, hg)
+         VALUES ($1, $2, $3, $4, $5, $6, FALSE, $7, $8, $9, $10, $11) RETURNING id`,
+        [company_name, first_name || null, last_name || null, phone || null, address || null, resale_certificate_number || null,
+         salmon_cut || null, skin_off ?? false, scale ?? false, pbo ?? false, hg ?? false]
       );
       const new_customer_id = customerResult.rows[0].id;
       await client.query(

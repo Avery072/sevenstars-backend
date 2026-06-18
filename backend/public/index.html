@@ -294,9 +294,9 @@
             <input class="search-input" placeholder="Search customer..." oninput="renderSalmonCuts(this.value)">
           </div>
           <table>
-            <thead><tr><th>Customer</th><th>Cut Type</th><th style="text-align:center;">Skin Off</th><th style="text-align:center;">Scale</th><th style="text-align:center;">PBO</th><th style="text-align:center;">H&amp;G</th></tr></thead>
+            <thead><tr><th>Customer</th><th>Cut Type</th><th style="text-align:center;">Skin Off</th><th style="text-align:center;">Scale</th><th style="text-align:center;">PBO</th><th style="text-align:center;">H&amp;G</th><th>Actions</th></tr></thead>
             <tbody id="cut-body">
-              <tr><td colspan="5" class="empty-state">Loading...</td></tr>
+              <tr><td colspan="7" class="empty-state">Loading...</td></tr>
             </tbody>
           </table>
         </div>
@@ -346,7 +346,7 @@
             <input class="search-input" placeholder="Search customers..." oninput="renderCustomers(this.value)">
           </div>
           <table>
-            <thead><tr><th>Company</th><th>Contact</th><th>Phone</th><th>Language</th><th>Status</th></tr></thead>
+            <thead><tr><th>Company</th><th>Contact</th><th>Phone</th><th>Language</th><th>Salmon</th><th>Status</th></tr></thead>
             <tbody id="customer-body">
               <tr><td colspan="5" class="empty-state">Loading...</td></tr>
             </tbody>
@@ -436,7 +436,10 @@
           <label class="form-label">H&amp;G?</label>
           <select class="form-select" id="nc-hg"><option value="false">No</option><option value="true">Yes</option></select>
         </div>
-        <div class="form-group"></div>
+        <div class="form-group">
+          <label class="form-label">Buys Salmon?</label>
+          <select class="form-select" id="nc-buys-salmon"><option value="false">No</option><option value="true">Yes</option></select>
+        </div>
       </div>
       <div class="form-group"><label class="form-label">Notes</label><input class="form-input" id="nc-notes" placeholder="Delivery or special order notes..."></div>
       <div class="form-error" id="nc-error"></div>
@@ -456,6 +459,36 @@
       <button class="modal-close" onclick="closeModal('modal-order-detail')">X</button>
     </div>
     <div class="modal-body" id="detail-body">Loading...</div>
+  </div>
+</div>
+
+<!-- MODAL: Edit Salmon Cut -->
+<div class="modal-overlay" id="modal-salmon-edit">
+  <div class="modal" style="max-width:420px;">
+    <div class="modal-head">
+      <div class="modal-title" id="salmon-edit-title">Edit Salmon Cut</div>
+      <button class="modal-close" onclick="closeModal('modal-salmon-edit')">X</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="se-customer-id">
+      <div class="form-group">
+        <label class="form-label">Cut Type</label>
+        <select class="form-select" id="se-cut"><option value="">N/A</option><option>D-Trim</option><option>Half</option><option>Half-Cut</option><option>Bags</option></select>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">Skin Off?</label><select class="form-select" id="se-skinoff"><option value="false">No</option><option value="true">Yes</option></select></div>
+        <div class="form-group"><label class="form-label">Scale?</label><select class="form-select" id="se-scale"><option value="false">No</option><option value="true">Yes</option></select></div>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">PBO?</label><select class="form-select" id="se-pbo"><option value="false">No</option><option value="true">Yes</option></select></div>
+        <div class="form-group"><label class="form-label">H&amp;G?</label><select class="form-select" id="se-hg"><option value="false">No</option><option value="true">Yes</option></select></div>
+      </div>
+      <div class="form-error" id="se-error"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-salmon-edit')">CANCEL</button>
+      <button class="btn btn-primary" onclick="saveSalmonCut()">SAVE</button>
+    </div>
   </div>
 </div>
 
@@ -829,33 +862,85 @@ function renderCustomers(q = '') {
   document.getElementById('customer-count').textContent = list.length + ' active';
   document.getElementById('customer-body').innerHTML = list.length ? list.map(c => {
     const contact = [c.first_name, c.last_name].filter(Boolean).join(' ') || '—';
-    const salmonBadge = (c.salmon_cut && c.salmon_cut !== 'N/A')
-      ? ' <span class="badge" style="background:#E2EFDA;color:#375623;border:1px solid #375623;">BUYS SALMON</span>' : '';
+    const salmonBtn = c.buys_salmon
+      ? `<button class="action-btn" onclick="toggleBuysSalmon(${c.id})" style="background:#E2EFDA;color:#375623;border-color:#375623;">SALMON ON</button>`
+      : `<button class="action-btn" onclick="toggleBuysSalmon(${c.id})">SALMON OFF</button>`;
     return `<tr>
-      <td style="font-weight:bold;">${c.company_name}${salmonBadge}</td>
+      <td style="font-weight:bold;">${c.company_name}</td>
       <td style="color:var(--gray-dark);">${contact}</td>
       <td class="mono" style="font-size:12px;">${c.phone || '—'}</td>
       <td>${c.language_pref || 'English'}</td>
+      <td>${salmonBtn}</td>
       <td><span class="badge badge-green">ACTIVE</span></td>
     </tr>`;
-  }).join('') : '<tr><td colspan="5" class="empty-state">No customers found.</td></tr>';
+  }).join('') : '<tr><td colspan="6" class="empty-state">No customers found.</td></tr>';
 }
 
 /* ── Salmon Cuts ── */
 function renderSalmonCuts(q = '') {
-  const withCuts = allCustomers.filter(c => c.salmon_cut && c.salmon_cut !== 'N/A');
-  const list = q ? withCuts.filter(c => c.company_name.toLowerCase().includes(q.toLowerCase())) : withCuts;
+  const withSalmon = allCustomers.filter(c => c.buys_salmon);
+  const list = q ? withSalmon.filter(c => c.company_name.toLowerCase().includes(q.toLowerCase())) : withSalmon;
   document.getElementById('cut-count').textContent = list.length + ' customers';
   const ck = (v) => v ? '<span class="cut-yes">&#10004;</span>' : '<span class="cut-no">—</span>';
   document.getElementById('cut-body').innerHTML = list.length ? list.map(c => `
     <tr>
       <td style="font-weight:bold;">${c.company_name}</td>
-      <td><span class="badge badge-gray">${c.salmon_cut}</span></td>
+      <td><span class="badge badge-gray">${c.salmon_cut || 'N/A'}</span></td>
       <td style="text-align:center;">${ck(c.skin_off)}</td>
       <td style="text-align:center;">${ck(c.scale)}</td>
       <td style="text-align:center;">${ck(c.pbo)}</td>
       <td style="text-align:center;">${ck(c.hg)}</td>
-    </tr>`).join('') : '<tr><td colspan="6" class="empty-state">No salmon cut preferences on file.</td></tr>';
+      <td><button class="action-btn" onclick='openSalmonEdit(${JSON.stringify(c)})'>EDIT</button></td>
+    </tr>`).join('') : '<tr><td colspan="7" class="empty-state">No customers on salmon cut list. Enable salmon for a customer from the Customers tab.</td></tr>';
+}
+
+async function toggleBuysSalmon(id) {
+  const c = allCustomers.find(c => c.id === id);
+  if (!c) return;
+  const res = await api(`/api/customers/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ buys_salmon: !c.buys_salmon })
+  });
+  if (res && res.id) {
+    Object.assign(c, res);
+    renderCustomers();
+    renderSalmonCuts();
+  } else {
+    alert('Failed to update salmon status');
+  }
+}
+
+function openSalmonEdit(c) {
+  document.getElementById('se-customer-id').value = c.id;
+  document.getElementById('salmon-edit-title').textContent = 'Edit Salmon Cut — ' + c.company_name;
+  document.getElementById('se-cut').value = c.salmon_cut || '';
+  document.getElementById('se-skinoff').value = c.skin_off ? 'true' : 'false';
+  document.getElementById('se-scale').value = c.scale ? 'true' : 'false';
+  document.getElementById('se-pbo').value = c.pbo ? 'true' : 'false';
+  document.getElementById('se-hg').value = c.hg ? 'true' : 'false';
+  document.getElementById('se-error').style.display = 'none';
+  document.getElementById('modal-salmon-edit').style.display = 'flex';
+}
+
+async function saveSalmonCut() {
+  const id = document.getElementById('se-customer-id').value;
+  const errEl = document.getElementById('se-error');
+  const body = {
+    salmon_cut: document.getElementById('se-cut').value || null,
+    skin_off: document.getElementById('se-skinoff').value === 'true',
+    scale: document.getElementById('se-scale').value === 'true',
+    pbo: document.getElementById('se-pbo').value === 'true',
+    hg: document.getElementById('se-hg').value === 'true',
+  };
+  const res = await api(`/api/customers/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+  if (res && res.id) {
+    const c = allCustomers.find(c => c.id === parseInt(id));
+    if (c) Object.assign(c, res);
+    closeModal('modal-salmon-edit');
+    renderSalmonCuts();
+  } else {
+    showErr(errEl, (res && res.error) || 'Failed to save');
+  }
 }
 
 /* ── Inventory ── */
@@ -1229,6 +1314,7 @@ async function submitCustomer() {
     scale: document.getElementById('nc-scale').value === 'true',
     pbo: document.getElementById('nc-pbo').value === 'true',
     hg: document.getElementById('nc-hg').value === 'true',
+    buys_salmon: document.getElementById('nc-buys-salmon').value === 'true',
     notes: document.getElementById('nc-notes').value.trim() || null,
   };
 
