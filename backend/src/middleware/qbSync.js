@@ -104,45 +104,27 @@ async function getQBAccounts() {
   }
 }
 
-async function queryQBAccountsByType(accountType) {
-  try {
-    const client = await getQBClient();
-    const query = `SELECT * FROM Account WHERE AccountType = '${accountType}'`;
-    const { data } = await client.get(`/query?query=${encodeURIComponent(query)}&minorversion=75`);
-    return data?.QueryResponse?.Account || [];
-  } catch (err) {
-    logQBError(`QB ${accountType} account query`, err);
-    throw err;
-  }
-}
-
 function activeAccount(account) {
   return account.Active !== false;
 }
 
-function firstActiveAccount(accounts) {
-  return accounts.find(activeAccount);
-}
-
 async function getQBInventoryItemAccountRefs() {
   try {
-    const [assetAccounts, incomeAccounts, expenseAccounts] = await Promise.all([
-      queryQBAccountsByType('OtherCurrentAsset'),
-      queryQBAccountsByType('Income'),
-      queryQBAccountsByType('Cost of Goods Sold'),
-    ]);
-
-    const assetAccount = assetAccounts.find(a => activeAccount(a) && a.AccountSubType === 'Inventory');
-    const incomeAccount = firstActiveAccount(incomeAccounts);
-    const expenseAccount = firstActiveAccount(expenseAccounts);
+    const accounts = await getQBAccounts();
+    const activeAccounts = accounts.filter(activeAccount);
+    const assetAccount = activeAccounts.find(a => a.AccountSubType === 'Inventory');
+    const incomeAccount = activeAccounts.find(a => a.AccountType === 'Income');
+    const expenseAccount = activeAccounts.find(a => a.AccountType === 'Cost of Goods Sold');
     const missing = [];
 
-    if (!incomeAccount) missing.push('IncomeAccountRef');
-    if (!assetAccount) missing.push('AssetAccountRef with AccountSubType Inventory');
-    if (!expenseAccount) missing.push('ExpenseAccountRef');
+    if (!incomeAccount) missing.push('IncomeAccountRef (AccountType Income)');
+    if (!assetAccount) missing.push('AssetAccountRef (AccountSubType Inventory)');
+    if (!expenseAccount) missing.push('ExpenseAccountRef (AccountType Cost of Goods Sold)');
 
     if (missing.length) {
-      throw new Error(`Missing QuickBooks inventory accounts: ${missing.join(', ')}`);
+      const error = new Error(`Missing QuickBooks inventory accounts: ${missing.join(', ')}`);
+      console.error(error.message);
+      throw error;
     }
 
     console.log('QB inventory accounts selected:', JSON.stringify({
