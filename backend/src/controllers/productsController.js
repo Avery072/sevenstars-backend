@@ -131,6 +131,7 @@ async function createProduct(req, res) {
     const inventoryPayload = {
       ...fallbackPayload,
       Type: 'Inventory',
+      TrackQtyOnHand: true,
       QtyOnHand: quantity_on_hand || 0,
       InvStartDate: inv_start_date || new Date().toISOString().split('T')[0],
       ...accountRefs,
