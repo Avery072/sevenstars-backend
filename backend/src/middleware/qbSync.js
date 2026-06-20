@@ -55,80 +55,39 @@ async function getQBAccounts() {
   return data?.QueryResponse?.Account || [];
 }
 
-function accountLabel(account) {
-  return account ? `${account.Name} (${account.Id})` : 'none';
-}
-
-function isActiveAccount(account) {
-  return account.Active !== false;
-}
-
-function normalizeAccountType(value) {
-  return (value || '').toLowerCase().replace(/[^a-z]/g, '');
-}
-
-function accountNameIncludes(account, text) {
-  return (account.Name || '').toLowerCase().includes(text.toLowerCase());
-}
-
-function findInventoryItemAccounts(accounts) {
-  const activeAccounts = accounts.filter(isActiveAccount);
-
-  const incomeAccount = activeAccounts.find(a => accountNameIncludes(a, 'Sales of Product Income'))
-    || activeAccounts.find(a => normalizeAccountType(a.AccountType) === 'income');
-
-  const assetAccount = activeAccounts.find(a => accountNameIncludes(a, 'Inventory Asset'))
-    || activeAccounts.find(a => normalizeAccountType(a.AccountSubType) === 'inventory')
-    || activeAccounts.find(a =>
-      normalizeAccountType(a.AccountType) === 'othercurrentasset' && accountNameIncludes(a, 'inventory')
-    );
-
-  const expenseAccount = activeAccounts.find(a => accountNameIncludes(a, 'Cost of Goods Sold'))
-    || activeAccounts.find(a => normalizeAccountType(a.AccountType) === 'costofgoodssold')
-    || activeAccounts.find(a => normalizeAccountType(a.AccountType) === 'expense' && accountNameIncludes(a, 'cost'));
-
-  return { incomeAccount, assetAccount, expenseAccount };
-}
-
-async function getQBInventoryItemAccountRefs() {
-  const accounts = await getQBAccounts();
-  const { incomeAccount, assetAccount, expenseAccount } = findInventoryItemAccounts(accounts);
-  const missing = [];
-
-  if (!incomeAccount) missing.push('IncomeAccountRef');
-  if (!assetAccount) missing.push('AssetAccountRef');
-  if (!expenseAccount) missing.push('ExpenseAccountRef');
-
-  if (missing.length) {
-    const available = accounts
-      .filter(isActiveAccount)
-      .map(a => `${a.Name} (${a.Id}, ${a.AccountType || 'unknown'}, ${a.AccountSubType || 'unknown'})`)
-      .join('; ');
-    throw new Error(
-      `Missing QuickBooks inventory account refs: ${missing.join(', ')}. Active accounts: ${available || 'none'}`
-    );
-  }
-
-  console.log('QB inventory accounts selected:', JSON.stringify({
-    IncomeAccountRef: accountLabel(incomeAccount),
-    AssetAccountRef: accountLabel(assetAccount),
-    ExpenseAccountRef: accountLabel(expenseAccount),
-  }));
-
-  return {
-    IncomeAccountRef: { value: incomeAccount.Id, name: incomeAccount.Name },
-    AssetAccountRef: { value: assetAccount.Id, name: assetAccount.Name },
-    ExpenseAccountRef: { value: expenseAccount.Id, name: expenseAccount.Name },
-  };
-}
-
 async function createQBItem(itemPayload) {
   console.log('createQBItem called with:', JSON.stringify(itemPayload));
   const client = await getQBClient();
+  let accounts = [];
+  try {
+    accounts = await getQBAccounts();
+  } catch (err) {
+    console.error('QB account lookup failed while creating item:', err.message);
+  }
+  const incomeAccount = accounts.find(a => a.Type === 'Income' || a.AccountType === 'Income');
+  const assetAccount = accounts.find(a =>
+    (a.Name || '').toLowerCase().includes('inventory') || a.AccountSubType === 'Inventory'
+  );
+  const cogsAccount = accounts.find(a =>
+    a.AccountType === 'Cost of Goods Sold' || (a.Name || '').toLowerCase().includes('cost')
+  );
+
   const payload = {
     ...itemPayload,
     Type: itemPayload.Type || 'NonInventory',
   };
+
+  if (incomeAccount && !payload.IncomeAccountRef) {
+    payload.IncomeAccountRef = { value: incomeAccount.Id, name: incomeAccount.Name };
+  }
+
+  if (payload.Type === 'Inventory' && assetAccount && !payload.AssetAccountRef) {
+    payload.AssetAccountRef = { value: assetAccount.Id, name: assetAccount.Name };
+  }
+
+  if (payload.Type === 'Inventory' && cogsAccount && !payload.ExpenseAccountRef) {
+    payload.ExpenseAccountRef = { value: cogsAccount.Id, name: cogsAccount.Name };
+  }
 
   const { data } = await client.post('/item?minorversion=75', payload);
   console.log('QB createItem raw response:', JSON.stringify(data));
@@ -208,6 +167,5 @@ module.exports = {
   createQBItem,
   deleteQBItem,
   getQBAccounts,
-  getQBInventoryItemAccountRefs,
   updateQBItem,
 };
