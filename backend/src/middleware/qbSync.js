@@ -113,7 +113,8 @@ async function getQBInventoryItemAccountRefs() {
     const accounts = await getQBAccounts();
     const activeAccounts = accounts.filter(activeAccount);
     const assetAccount = activeAccounts.find(a => a.AccountSubType === 'Inventory');
-    const incomeAccount = activeAccounts.find(a => a.AccountType === 'Income');
+    const incomeAccount = activeAccounts.find(a => a.AccountType === 'Income' && a.Name === 'Sales')
+      || activeAccounts.find(a => a.AccountType === 'Income');
     const expenseAccount = activeAccounts.find(a => a.AccountType === 'Cost of Goods Sold');
     const missing = [];
 
