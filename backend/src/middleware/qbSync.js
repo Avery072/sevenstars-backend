@@ -55,39 +55,61 @@ async function getQBAccounts() {
   return data?.QueryResponse?.Account || [];
 }
 
+async function queryQBAccountsByType(accountType) {
+  const client = await getQBClient();
+  const query = `SELECT * FROM Account WHERE AccountType = '${accountType}'`;
+  const { data } = await client.get(`/query?query=${encodeURIComponent(query)}&minorversion=75`);
+  return data?.QueryResponse?.Account || [];
+}
+
+function activeAccount(account) {
+  return account.Active !== false;
+}
+
+function firstActiveAccount(accounts) {
+  return accounts.find(activeAccount);
+}
+
+async function getQBInventoryItemAccountRefs() {
+  const [assetAccounts, incomeAccounts, expenseAccounts] = await Promise.all([
+    queryQBAccountsByType('OtherCurrentAsset'),
+    queryQBAccountsByType('Income'),
+    queryQBAccountsByType('Cost of Goods Sold'),
+  ]);
+
+  const assetAccount = assetAccounts.find(a => activeAccount(a) && a.AccountSubType === 'Inventory');
+  const incomeAccount = firstActiveAccount(incomeAccounts);
+  const expenseAccount = firstActiveAccount(expenseAccounts);
+  const missing = [];
+
+  if (!incomeAccount) missing.push('IncomeAccountRef');
+  if (!assetAccount) missing.push('AssetAccountRef with AccountSubType Inventory');
+  if (!expenseAccount) missing.push('ExpenseAccountRef');
+
+  if (missing.length) {
+    throw new Error(`Missing QuickBooks inventory accounts: ${missing.join(', ')}`);
+  }
+
+  console.log('QB inventory accounts selected:', JSON.stringify({
+    IncomeAccountRef: `${incomeAccount.Name} (${incomeAccount.Id})`,
+    AssetAccountRef: `${assetAccount.Name} (${assetAccount.Id})`,
+    ExpenseAccountRef: `${expenseAccount.Name} (${expenseAccount.Id})`,
+  }));
+
+  return {
+    IncomeAccountRef: { value: incomeAccount.Id, name: incomeAccount.Name },
+    AssetAccountRef: { value: assetAccount.Id, name: assetAccount.Name },
+    ExpenseAccountRef: { value: expenseAccount.Id, name: expenseAccount.Name },
+  };
+}
+
 async function createQBItem(itemPayload) {
   console.log('createQBItem called with:', JSON.stringify(itemPayload));
   const client = await getQBClient();
-  let accounts = [];
-  try {
-    accounts = await getQBAccounts();
-  } catch (err) {
-    console.error('QB account lookup failed while creating item:', err.message);
-  }
-  const incomeAccount = accounts.find(a => a.Type === 'Income' || a.AccountType === 'Income');
-  const assetAccount = accounts.find(a =>
-    (a.Name || '').toLowerCase().includes('inventory') || a.AccountSubType === 'Inventory'
-  );
-  const cogsAccount = accounts.find(a =>
-    a.AccountType === 'Cost of Goods Sold' || (a.Name || '').toLowerCase().includes('cost')
-  );
-
   const payload = {
     ...itemPayload,
     Type: itemPayload.Type || 'NonInventory',
   };
-
-  if (incomeAccount && !payload.IncomeAccountRef) {
-    payload.IncomeAccountRef = { value: incomeAccount.Id, name: incomeAccount.Name };
-  }
-
-  if (payload.Type === 'Inventory' && assetAccount && !payload.AssetAccountRef) {
-    payload.AssetAccountRef = { value: assetAccount.Id, name: assetAccount.Name };
-  }
-
-  if (payload.Type === 'Inventory' && cogsAccount && !payload.ExpenseAccountRef) {
-    payload.ExpenseAccountRef = { value: cogsAccount.Id, name: cogsAccount.Name };
-  }
 
   const { data } = await client.post('/item?minorversion=75', payload);
   console.log('QB createItem raw response:', JSON.stringify(data));
@@ -167,5 +189,6 @@ module.exports = {
   createQBItem,
   deleteQBItem,
   getQBAccounts,
+  getQBInventoryItemAccountRefs,
   updateQBItem,
 };

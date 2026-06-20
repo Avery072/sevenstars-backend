@@ -1,5 +1,5 @@
 const pool = require('../config/db');
-const { createQBItem, deleteQBItem, getQBAccounts } = require('../middleware/qbSync');
+const { createQBItem, deleteQBItem, getQBInventoryItemAccountRefs } = require('../middleware/qbSync');
 const cloudinary = require('cloudinary').v2;
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -12,6 +12,40 @@ async function listProducts(req, res) {
     'SELECT * FROM products WHERE active = TRUE ORDER BY category, description'
   );
   res.json(result.rows);
+}
+
+function formatQBError(err) {
+  if (err.response?.data) {
+    return JSON.stringify({
+      status: err.response.status,
+      data: err.response.data,
+    });
+  }
+  return err.stack || err.message || String(err);
+}
+
+async function syncFallbackNonInventory(product, itemPayload, reason) {
+  console.error('QB Inventory item creation failed, retrying as NonInventory:', reason);
+
+  const qbItem = await createQBItem({
+    Name: itemPayload.Name,
+    Description: itemPayload.Description,
+    Type: 'NonInventory',
+    UnitPrice: itemPayload.UnitPrice,
+    PurchaseCost: itemPayload.PurchaseCost,
+    IncomeAccountRef: itemPayload.IncomeAccountRef,
+    ExpenseAccountRef: itemPayload.ExpenseAccountRef,
+  });
+
+  if (qbItem && qbItem.Id) {
+    await pool.query('UPDATE products SET qb_item_id = $1 WHERE id = $2', [qbItem.Id, product.id]);
+    product.qb_item_id = qbItem.Id;
+  }
+}
+
+async function storeQBItemError(product, error) {
+  product.qb_item_id = `ERROR product ${product.id}: ${error}`;
+  await pool.query('UPDATE products SET qb_item_id = $1 WHERE id = $2', [product.qb_item_id, product.id]);
 }
 
 async function createProduct(req, res) {
@@ -60,78 +94,70 @@ async function createProduct(req, res) {
     ]
   );
 
-  try {
-    const accounts = await getQBAccounts();
-    const incomeAccount = accounts.find(a =>
-      (a.Name || '').includes('Sales of Product Income') || a.AccountType === 'Income'
-    );
-    const assetAccount = accounts.find(a =>
-      (a.Name || '').includes('Inventory Asset') || a.AccountSubType === 'Inventory'
-    );
-    const expenseAccount = accounts.find(a =>
-      (a.Name || '').includes('Cost of Goods Sold') || a.AccountType === 'Cost of Goods Sold'
-    );
-    const incomeAccountRef = incomeAccount
-      ? { value: incomeAccount.Id, name: incomeAccount.Name }
-      : undefined;
+  const product = result.rows[0];
+  const fallbackPayload = {
+    Name: sku,
+    Description: description,
+    UnitPrice: price || 0,
+    PurchaseCost: cost || 0,
+  };
+  let nonInventoryPayload = fallbackPayload;
 
-    const inventoryPayload = {
-      Name: sku,
-      Description: description,
-      Type: 'Inventory',
-      UnitPrice: price || 0,
-      PurchaseCost: cost || 0,
-      QtyOnHand: quantity_on_hand || 0,
-      InvStartDate: inv_start_date || new Date().toISOString().split('T')[0],
-      IncomeAccountRef: incomeAccountRef,
-      AssetAccountRef: assetAccount
-        ? { value: assetAccount.Id, name: assetAccount.Name }
-        : undefined,
-      ExpenseAccountRef: expenseAccount
-        ? { value: expenseAccount.Id, name: expenseAccount.Name }
-        : undefined,
+  try {
+    let accountRefs;
+    try {
+      accountRefs = await getQBInventoryItemAccountRefs();
+    } catch (accountErr) {
+      const accountError = formatQBError(accountErr);
+      try {
+        await syncFallbackNonInventory(product, fallbackPayload, `QB account query failed: ${accountError}`);
+      } catch (fallbackErr) {
+        const qbError = formatQBError(fallbackErr);
+        console.error('QB item creation failed:', qbError);
+        try {
+          await storeQBItemError(product, qbError);
+        } catch (dbErr) {
+          console.error('Failed to store QB item creation error:', dbErr.message);
+        }
+      }
+      return res.status(201).json(product);
+    }
+    nonInventoryPayload = {
+      ...fallbackPayload,
+      IncomeAccountRef: accountRefs.IncomeAccountRef,
+      ExpenseAccountRef: accountRefs.ExpenseAccountRef,
     };
 
-    const qbItem = await createQBItem({
-      ...inventoryPayload,
-    });
+    const inventoryPayload = {
+      ...fallbackPayload,
+      Type: 'Inventory',
+      QtyOnHand: quantity_on_hand || 0,
+      InvStartDate: inv_start_date || new Date().toISOString().split('T')[0],
+      ...accountRefs,
+    };
+
+    const qbItem = await createQBItem(inventoryPayload);
 
     if (qbItem && qbItem.Id) {
-      await pool.query('UPDATE products SET qb_item_id = $1 WHERE id = $2', [qbItem.Id, result.rows[0].id]);
-      result.rows[0].qb_item_id = qbItem.Id;
+      await pool.query('UPDATE products SET qb_item_id = $1 WHERE id = $2', [qbItem.Id, product.id]);
+      product.qb_item_id = qbItem.Id;
     }
-  } catch (inventoryErr) {
-    const inventoryError = inventoryErr.response?.data ? JSON.stringify(inventoryErr.response.data) : inventoryErr.message;
-    console.error('QB Inventory item creation failed, retrying as NonInventory:', inventoryError);
-
+  } catch (err) {
+    const inventoryError = formatQBError(err);
     try {
-      const qbItem = await createQBItem({
-        Name: sku,
-        Description: description,
-        Type: 'NonInventory',
-        UnitPrice: price || 0,
-      });
-
-      if (qbItem && qbItem.Id) {
-        await pool.query('UPDATE products SET qb_item_id = $1 WHERE id = $2', [qbItem.Id, result.rows[0].id]);
-        result.rows[0].qb_item_id = qbItem.Id;
-      }
-    } catch (err) {
-      const qbError = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+      await syncFallbackNonInventory(product, nonInventoryPayload, inventoryError);
+    } catch (fallbackErr) {
+      const qbError = formatQBError(fallbackErr);
       console.error('QB item creation failed:', qbError);
-      result.rows[0].qb_item_id = 'ERROR: ' + qbError;
       try {
-        await pool.query(
-          'UPDATE products SET qb_item_id = $1 WHERE id = $2',
-          [result.rows[0].qb_item_id, result.rows[0].id]
-        );
+        await storeQBItemError(product, qbError);
       } catch (dbErr) {
         console.error('Failed to store QB item creation error:', dbErr.message);
       }
     }
   }
 
-  res.status(201).json(result.rows[0]);
+  res.status(201).json(product);
 }
 
 async function updateProduct(req, res) {
