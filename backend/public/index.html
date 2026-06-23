@@ -502,11 +502,11 @@
       <div id="product-err" class="error-msg" style="display:none;"></div>
       <div class="form-row">
         <div class="form-group">
-          <label>SKU *</label>
+          <label>SKU</label>
           <input id="np-sku" type="text" placeholder="e.g. FSALMON5LB" />
         </div>
         <div class="form-group">
-          <label>Unit *</label>
+          <label>Unit</label>
           <select id="np-unit">
             <option value="ea" selected>Each</option>
             <option value="lb">lb</option>
@@ -545,7 +545,7 @@
       <div class="form-row">
         <div class="form-group">
           <label>Initial Qty on Hand <span style="color:red">*</span></label>
-          <input id="np-qty" type="number" step="0.01" placeholder="0" />
+          <input id="np-qty" type="number" step="1" pattern="[0-9]*" placeholder="0" />
         </div>
         <div class="form-group">
           <label>As of Date <span style="color:red">*</span></label>
@@ -1384,6 +1384,21 @@ async function submitNewProduct() {
     productSubmitting = false;
   }
 }
+
+function updateProductQtyStep() {
+  const unit = document.getElementById('np-unit').value;
+  const qty = document.getElementById('np-qty');
+  if (unit === 'ea') {
+    qty.setAttribute('step', '1');
+    qty.setAttribute('pattern', '[0-9]*');
+  } else {
+    qty.setAttribute('step', '0.01');
+    qty.removeAttribute('pattern');
+  }
+}
+
+document.getElementById('np-unit').addEventListener('change', updateProductQtyStep);
+updateProductQtyStep();
 
 /* ── Navigation ── */
 const panelTitles = { orders:'Orders', packing:'Packing Report', products:'Products', salmon:'Salmon Cuts', inventory:'Inventory', customers:'Customers', pending:'Pending Approvals' };
