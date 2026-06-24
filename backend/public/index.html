@@ -831,7 +831,7 @@ function renderProducts(q = '') {
       <td class="mono">${product.quantity_on_hand ?? '—'}</td>
       <td>${status}${qbBadge}</td>
       <td style="white-space:nowrap;">
-        <button class="action-btn" onclick="triggerImageUpload(${product.id})" title="Upload image">&#128247;</button>
+        <button class="action-btn" onclick="triggerImageUpload(${product.id})" title="${product.image_url ? 'Replace image' : 'Upload image'}" style="${product.image_url ? 'background:var(--green-light,#e6f4ea);color:#1a7f37;border-color:#1a7f37;' : ''}">&#128247;</button>
         <button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="deleteProduct(${product.id},'${product.description.replace(/'/g,"\\'")}')">&#10005;</button>
       </td>
     </tr>`;
@@ -866,6 +866,7 @@ function triggerImageUpload(id) {
     if (data.image_url) {
       const p = allProducts.find(p => p.id === id);
       if (p) p.image_url = data.image_url;
+      renderProducts();
       alert('Image uploaded!');
     } else {
       alert(data.error || 'Upload failed');
