@@ -200,6 +200,7 @@
     <div class="nav-item" onclick="showPanel('inventory',this)">&#9632; Inventory</div>
     <div class="sidebar-section">Accounts</div>
     <div class="nav-item" onclick="showPanel('customers',this)">&#9632; Customers</div>
+    <div class="nav-item" onclick="showPanel('accounts',this)">&#9632; User Accounts</div>
     <div class="nav-item" onclick="showPanel('pending',this)" id="nav-pending">&#9632; Pending Approvals <span class="nav-badge" id="pending-badge" style="display:none;">0</span></div>
     <div class="sidebar-footer">
       <div class="user-name" id="sidebar-user">admin</div>
@@ -321,6 +322,24 @@
       </div>
 
       <!-- PENDING APPROVALS -->
+      <!-- USER ACCOUNTS -->
+      <div class="panel" id="panel-accounts">
+        <p style="font-size:12px;color:var(--gray-dark);margin-bottom:12px;line-height:1.6;">All mobile app accounts grouped by company. Primary account is listed first. Deleting the primary account is blocked while team members exist.</p>
+        <div class="table-card">
+          <div class="table-header">
+            <div class="table-title">User Accounts</div>
+            <div class="table-count" id="accounts-count">—</div>
+            <input class="search-input" placeholder="Search company or email..." oninput="renderAccounts(this.value)">
+          </div>
+          <table>
+            <thead><tr><th>Company</th><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Joined</th><th>Action</th></tr></thead>
+            <tbody id="accounts-body">
+              <tr><td colspan="7" class="empty-state">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="panel" id="panel-pending">
         <p style="font-size:12px;color:var(--gray-dark);margin-bottom:12px;line-height:1.6;">Customers who signed up via the mobile app and are awaiting approval. Verify they are a legitimate fish reseller before approving.</p>
         <div class="table-card">
@@ -1434,8 +1453,8 @@ document.getElementById('np-unit').addEventListener('change', updateProductQtySt
 updateProductQtyStep();
 
 /* ── Navigation ── */
-const panelTitles = { orders:'Orders', packing:'Packing Report', products:'Products', salmon:'Salmon Cuts', inventory:'Inventory', customers:'Customers', pending:'Pending Approvals' };
-const panelBtns   = { orders:'+ NEW ORDER', packing:'GENERATE REPORT', products:'+ ADD PRODUCT', salmon:'', inventory:'', customers:'+ NEW CUSTOMER', pending:'' };
+const panelTitles = { orders:'Orders', packing:'Packing Report', products:'Products', salmon:'Salmon Cuts', inventory:'Inventory', customers:'Customers', accounts:'User Accounts', pending:'Pending Approvals' };
+const panelBtns   = { orders:'+ NEW ORDER', packing:'GENERATE REPORT', products:'+ ADD PRODUCT', salmon:'', inventory:'', customers:'+ NEW CUSTOMER', accounts:'', pending:'' };
 
 function showPanel(name, el) {
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
@@ -1447,6 +1466,7 @@ function showPanel(name, el) {
   btn.textContent = panelBtns[name] || '';
   btn.style.display = panelBtns[name] ? '' : 'none';
   if (name === 'pending') loadPending();
+  if (name === 'accounts') loadAccounts();
 }
 
 function handleTopbarBtn() {
@@ -1468,6 +1488,80 @@ document.querySelectorAll('.modal-overlay').forEach(m => {
 });
 
 function showErr(el, msg) { el.textContent = msg; el.style.display = 'block'; }
+
+/* ── User Accounts ── */
+let allAccountRows = [];
+
+async function loadAccounts() {
+  const data = await api('/api/admin/accounts');
+  if (!data) return;
+  allAccountRows = data;
+  renderAccounts();
+}
+
+function renderAccounts(q = '') {
+  const rows = q
+    ? allAccountRows.filter(r =>
+        (r.company_name||'').toLowerCase().includes(q.toLowerCase()) ||
+        (r.email||'').toLowerCase().includes(q.toLowerCase()) ||
+        (r.name||'').toLowerCase().includes(q.toLowerCase())
+      )
+    : allAccountRows;
+
+  // Group by customer_id
+  const companies = {};
+  for (const r of rows) {
+    if (!companies[r.customer_id]) companies[r.customer_id] = { name: r.company_name, active: r.company_active, users: [] };
+    if (r.user_id) companies[r.customer_id].users.push(r);
+  }
+
+  const companyList = Object.values(companies);
+  document.getElementById('accounts-count').textContent =
+    companyList.length + ' companies, ' + rows.filter(r => r.user_id).length + ' accounts';
+
+  if (!companyList.length) {
+    document.getElementById('accounts-body').innerHTML = '<tr><td colspan="7" class="empty-state">No accounts found.</td></tr>';
+    return;
+  }
+
+  document.getElementById('accounts-body').innerHTML = companyList.map(company => {
+    const companyRow = `<tr style="background:var(--gray-light);border-top:2px solid var(--gray-mid);">
+      <td colspan="7" style="font-weight:bold;font-size:12px;padding:5px 10px;">
+        ${company.name}
+        ${!company.active ? '<span class="badge badge-amber" style="margin-left:6px;">INACTIVE</span>' : ''}
+      </td>
+    </tr>`;
+
+    const userRows = company.users.map(u => {
+      const date = u.created_at ? new Date(u.created_at).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' }) : '—';
+      const roleBadge = u.is_main
+        ? '<span class="badge" style="background:#dbeafe;color:#1d4ed8;">PRIMARY</span>'
+        : '<span class="badge badge-gray">SECONDARY</span>';
+      const statusBadge = u.user_active
+        ? '<span class="badge badge-green">ACTIVE</span>'
+        : '<span class="badge badge-amber">PENDING</span>';
+      return `<tr>
+        <td style="padding-left:24px;color:var(--gray-dark);font-size:11px;">↳</td>
+        <td>${u.name || '—'}</td>
+        <td style="font-size:11px;">${u.email}</td>
+        <td>${roleBadge}</td>
+        <td>${statusBadge}</td>
+        <td style="font-size:11px;color:var(--gray-dark);">${date}</td>
+        <td><button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="deleteAccount(${u.user_id},'${(u.name||u.email).replace(/'/g,"\\'")}')">&#10005; DELETE</button></td>
+      </tr>`;
+    }).join('');
+
+    return companyRow + (userRows || `<tr><td colspan="7" style="padding-left:24px;font-size:11px;color:var(--gray-dark);">No mobile accounts</td></tr>`);
+  }).join('');
+}
+
+async function deleteAccount(id, name) {
+  if (!confirm(`Delete account for ${name}? This cannot be undone.`)) return;
+  const res = await api(`/api/admin/accounts/user/${id}`, { method: 'DELETE' });
+  if (!res) return;
+  if (res.error) { alert(res.error); return; }
+  await loadAccounts();
+}
 
 /* ── Pending Approvals ── */
 async function loadPending() {

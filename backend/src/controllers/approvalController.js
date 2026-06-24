@@ -84,4 +84,37 @@ async function rejectSubUser(req, res) {
   res.json({ message: `${result.rows[0].name || result.rows[0].email} rejected` });
 }
 
-module.exports = { listPending, approveCustomer, rejectCustomer, listPendingSubUsers, approveSubUser, rejectSubUser };
+// All companies with their mobile users — primary first, then secondary
+async function listAllAccounts(req, res) {
+  const result = await pool.query(
+    `SELECT c.id AS customer_id, c.company_name, c.active AS company_active,
+            mu.id AS user_id, mu.name, mu.email, mu.is_main, mu.active AS user_active, mu.created_at
+     FROM customers c
+     LEFT JOIN mobile_users mu ON mu.customer_id = c.id
+     ORDER BY c.company_name, mu.is_main DESC NULLS LAST, mu.created_at ASC`
+  );
+  res.json(result.rows);
+}
+
+// Delete a single mobile_user account. Blocks if deleting the primary and sub-users still exist.
+async function deleteAccount(req, res) {
+  const { id } = req.params;
+  const user = await pool.query('SELECT id, name, email, is_main, customer_id FROM mobile_users WHERE id = $1', [id]);
+  if (!user.rows.length) return res.status(404).json({ error: 'Account not found' });
+
+  const { is_main, customer_id, name, email } = user.rows[0];
+  if (is_main) {
+    const others = await pool.query(
+      'SELECT id FROM mobile_users WHERE customer_id = $1 AND id != $2',
+      [customer_id, id]
+    );
+    if (others.rows.length) {
+      return res.status(409).json({ error: 'Cannot delete the primary account while team members exist. Remove them first.' });
+    }
+  }
+
+  await pool.query('DELETE FROM mobile_users WHERE id = $1', [id]);
+  res.json({ message: `${name || email} deleted` });
+}
+
+module.exports = { listPending, approveCustomer, rejectCustomer, listPendingSubUsers, approveSubUser, rejectSubUser, listAllAccounts, deleteAccount };
