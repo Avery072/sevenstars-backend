@@ -521,7 +521,26 @@
       <div class="form-row">
         <div class="form-group">
           <label>Category</label>
-          <input id="np-category" type="text" placeholder="e.g. Fish, Shellfish" />
+          <select id="np-category">
+            <option value="White Fish / Premium Fish" selected>White Fish / Premium Fish</option>
+            <option value="Salmon">Salmon</option>
+            <option value="Tuna">Tuna</option>
+            <option value="Shrimp / Ebi">Shrimp / Ebi</option>
+            <option value="Shellfish">Shellfish</option>
+            <option value="Crab / Imitation Crab">Crab / Imitation Crab</option>
+            <option value="Squid / Octopus">Squid / Octopus</option>
+            <option value="Fish Roe / Specialty Seafood">Fish Roe / Specialty Seafood</option>
+            <option value="Eel / Unagi">Eel / Unagi</option>
+            <option value="Seaweed / Sushi Wraps">Seaweed / Sushi Wraps</option>
+            <option value="Frozen Appetizers / Prepared Foods">Frozen Appetizers / Prepared Foods</option>
+            <option value="Noodles / Ramen / Soup Base">Noodles / Ramen / Soup Base</option>
+            <option value="Tofu / Toppings / Garnish">Tofu / Toppings / Garnish</option>
+            <option value="Vegetables / Pickles / Garnish">Vegetables / Pickles / Garnish</option>
+            <option value="Sauces / Seasonings / Condiments">Sauces / Seasonings / Condiments</option>
+            <option value="Dry Goods / Baking / Batter">Dry Goods / Baking / Batter</option>
+            <option value="Meat / Non-seafood Protein">Meat / Non-seafood Protein</option>
+            <option value="Packaging / Consumption Supplies">Packaging / Consumption Supplies</option>
+          </select>
         </div>
         <div class="form-group">
           <label>Vendor</label>
@@ -1372,8 +1391,9 @@ async function submitNewProduct() {
       renderProducts(productSearchQuery);
       updateStats();
       closeModal('modal-product');
-      ['np-sku','np-description','np-unit','np-category','np-vendor',
+      ['np-sku','np-description','np-unit','np-vendor',
        'np-cost','np-price','np-reorder','np-qty','np-inv-date'].forEach(id => document.getElementById(id).value = '');
+      document.getElementById('np-category').value = 'White Fish / Premium Fish';
       document.getElementById('np-show-price').checked = true;
     } else {
       showErr(errEl, (res && res.error) || 'Failed to create product');

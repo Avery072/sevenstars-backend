@@ -167,6 +167,29 @@ async function createQBItem(itemPayload) {
   }
 }
 
+async function getOrCreateQBItemCategory(categoryName) {
+  try {
+    const category = (categoryName || '').trim();
+    if (!category) return null;
+
+    const items = await queryQBAll('Item');
+    const existing = items.find(item =>
+      item.Type === 'Category'
+      && item.Active !== false
+      && (item.Name || '').toLowerCase() === category.toLowerCase()
+    );
+    if (existing) return existing;
+
+    return createQBItem({
+      Name: category,
+      Type: 'Category',
+    });
+  } catch (err) {
+    logQBError(`QB item category lookup/create ${categoryName}`, err);
+    throw err;
+  }
+}
+
 async function deleteQBItem(qbItemId) {
   try {
     const client = await getQBClient();
@@ -253,6 +276,7 @@ module.exports = {
   appendToQBInvoice,
   createQBCustomer,
   createQBItem,
+  getOrCreateQBItemCategory,
   deleteQBItem,
   getQBAccounts,
   getQBInventoryItemAccountRefs,

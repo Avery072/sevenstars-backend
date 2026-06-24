@@ -1,11 +1,37 @@
 const pool = require('../config/db');
-const { createQBItem, deleteQBItem, getQBInventoryItemAccountRefs } = require('../middleware/qbSync');
+const {
+  createQBItem,
+  deleteQBItem,
+  getOrCreateQBItemCategory,
+  getQBInventoryItemAccountRefs,
+} = require('../middleware/qbSync');
 const cloudinary = require('cloudinary').v2;
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
+
+const PRODUCT_CATEGORIES = [
+  'White Fish / Premium Fish',
+  'Salmon',
+  'Tuna',
+  'Shrimp / Ebi',
+  'Shellfish',
+  'Crab / Imitation Crab',
+  'Squid / Octopus',
+  'Fish Roe / Specialty Seafood',
+  'Eel / Unagi',
+  'Seaweed / Sushi Wraps',
+  'Frozen Appetizers / Prepared Foods',
+  'Noodles / Ramen / Soup Base',
+  'Tofu / Toppings / Garnish',
+  'Vegetables / Pickles / Garnish',
+  'Sauces / Seasonings / Condiments',
+  'Dry Goods / Baking / Batter',
+  'Meat / Non-seafood Protein',
+  'Packaging / Consumption Supplies',
+];
 
 async function listProducts(req, res) {
   const result = await pool.query(
@@ -33,6 +59,8 @@ async function syncFallbackNonInventory(product, itemPayload, reason) {
     Type: 'NonInventory',
     UnitPrice: itemPayload.UnitPrice,
     PurchaseCost: itemPayload.PurchaseCost,
+    ParentRef: itemPayload.ParentRef,
+    SubItem: itemPayload.SubItem,
     IncomeAccountRef: itemPayload.IncomeAccountRef,
     ExpenseAccountRef: itemPayload.ExpenseAccountRef,
   });
@@ -65,6 +93,9 @@ async function createProduct(req, res) {
 
   if (!sku || !description || !unit) {
     return res.status(400).json({ error: 'sku, description, and unit are required' });
+  }
+  if (!PRODUCT_CATEGORIES.includes(category)) {
+    return res.status(400).json({ error: 'Valid category is required' });
   }
 
   const existing = await pool.query(
@@ -104,6 +135,12 @@ async function createProduct(req, res) {
   let nonInventoryPayload = fallbackPayload;
 
   try {
+    const qbCategory = await getOrCreateQBItemCategory(category);
+    if (qbCategory && qbCategory.Id) {
+      fallbackPayload.ParentRef = { value: qbCategory.Id, name: qbCategory.Name };
+      fallbackPayload.SubItem = true;
+    }
+
     let accountRefs;
     try {
       accountRefs = await getQBInventoryItemAccountRefs();
