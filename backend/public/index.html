@@ -522,7 +522,8 @@
         <div class="form-group">
           <label>Category</label>
           <select id="np-category">
-            <option value="White Fish / Premium Fish" selected>White Fish / Premium Fish</option>
+            <option value="" selected></option>
+            <option value="White Fish / Premium Fish">White Fish / Premium Fish</option>
             <option value="Salmon">Salmon</option>
             <option value="Tuna">Tuna</option>
             <option value="Shrimp / Ebi">Shrimp / Ebi</option>
@@ -1393,7 +1394,7 @@ async function submitNewProduct() {
       closeModal('modal-product');
       ['np-sku','np-description','np-unit','np-vendor',
        'np-cost','np-price','np-reorder','np-qty','np-inv-date'].forEach(id => document.getElementById(id).value = '');
-      document.getElementById('np-category').value = 'White Fish / Premium Fish';
+      document.getElementById('np-category').value = '';
       document.getElementById('np-show-price').checked = true;
     } else {
       showErr(errEl, (res && res.error) || 'Failed to create product');
