@@ -228,6 +228,7 @@
       <div style="font-size:11px;color:var(--gray-dark);" id="topbar-date"></div>
       <div class="topbar-right">
         <button class="btn btn-outline" id="sync-pending-btn" onclick="syncPendingInvoices()" style="display:none;font-size:11px;">&#8635; SYNC PENDING TO QB</button>
+        <button class="btn btn-outline" id="sync-invoices-btn" onclick="syncInvoicesFromQB()" style="font-size:11px;">&#8595; PULL INVOICES FROM QB</button>
         <button class="btn btn-primary" id="topbar-btn" onclick="handleTopbarBtn()">+ NEW ORDER</button>
       </div>
     </div>
@@ -764,6 +765,21 @@ async function loadAll() {
 }
 
 /* ── Sync pending invoices ── */
+async function syncInvoicesFromQB() {
+  const btn = document.getElementById('sync-invoices-btn');
+  btn.textContent = '⏳ Pulling...';
+  btn.disabled = true;
+  const res = await api('/api/admin/sync-invoices-from-qb', { method: 'POST' });
+  btn.disabled = false;
+  btn.textContent = '↓ PULL INVOICES FROM QB';
+  if (res) {
+    alert(`Invoice sync complete — ${res.created} new orders created, ${res.updated} updated, ${res.skipped} skipped.`);
+    allOrders = await api('/api/orders') || allOrders;
+    renderOrders();
+    checkPendingInvoices();
+  }
+}
+
 async function syncPendingInvoices() {
   const btn = document.getElementById('sync-pending-btn');
   btn.textContent = '⏳ Syncing...';

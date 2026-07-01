@@ -203,4 +203,4 @@ async function syncCustomer(qbCustomerId, operation) {
   );
 }
 
-module.exports = { handleWebhook };
+module.exports = { handleWebhook, syncInvoice };
