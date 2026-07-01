@@ -171,8 +171,9 @@ async function processInvoice(invoice) {
 
 async function syncInvoice(qbInvoiceId, operation) {
   if (operation === 'Delete') {
-    await pool.query('UPDATE orders SET qb_invoice_id = NULL WHERE qb_invoice_id = $1', [qbInvoiceId]);
-    console.log(`QB invoice ${qbInvoiceId} deleted — unlinked from orders`);
+    // Leave qb_invoice_id intact — nulling it would make the order appear as "unpushed"
+    // and trigger an unwanted re-push. The appendToQBInvoice fallback handles stale IDs.
+    console.log(`QB invoice ${qbInvoiceId} deleted in QB — order record kept as-is`);
     return;
   }
   const invoice = await fetchQBInvoice(qbInvoiceId);
