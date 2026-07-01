@@ -70,12 +70,16 @@ async function fetchQBInvoice(invoiceId) {
 
 async function getNextDocNumber(client) {
   try {
-    const query = `SELECT DocNumber FROM Invoice ORDER BY MetaData.CreateTime DESC MAXRESULTS 1`;
+    // QB IQL uses ORDERBY (no space); sort by Id DESC (auto-increment) to get latest
+    const query = `SELECT DocNumber FROM Invoice ORDERBY Id DESC MAXRESULTS 1`;
     const { data } = await client.get(`/query?query=${encodeURIComponent(query)}&minorversion=65`);
     const last = data?.QueryResponse?.Invoice?.[0]?.DocNumber;
     if (last && /^\d+$/.test(last)) return String(parseInt(last, 10) + 1);
-  } catch (_) {}
-  return undefined; // fall back to QB default if query fails
+    console.warn('getNextDocNumber: last DocNumber was', last, '— not purely numeric, skipping');
+  } catch (err) {
+    console.warn('getNextDocNumber failed:', err.message);
+  }
+  return undefined;
 }
 
 async function createQBInvoice(invoicePayload) {
