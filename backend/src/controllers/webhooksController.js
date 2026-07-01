@@ -5,22 +5,42 @@ const { fetchQBItem, fetchQBCustomer, fetchQBInvoice } = require('../middleware/
 // QB sends a signature in the intuit-signature header; verify before processing.
 function verifySignature(req) {
   const signature = req.headers['intuit-signature'];
-  if (!signature) return false;
-
   const verifierToken = process.env.QB_WEBHOOK_VERIFIER_TOKEN;
+  
+  console.log('=== WEBHOOK SIGNATURE VERIFICATION ===');
+  console.log('Signature header received:', signature ? 'YES' : 'NO');
+  console.log('Verifier token set:', verifierToken ? 'YES' : 'NO');
+  console.log('Request body:', JSON.stringify(req.body).substring(0, 200));
+  
+  if (!signature) {
+    console.log('FAIL: No signature header');
+    return false;
+  }
+
   const hash = crypto
     .createHmac('sha256', verifierToken)
     .update(JSON.stringify(req.body))
     .digest('base64');
 
-  return hash === signature;
+  const isValid = hash === signature;
+  console.log('Expected hash:', hash.substring(0, 20) + '...');
+  console.log('Received hash:', signature.substring(0, 20) + '...');
+  console.log('Match:', isValid ? 'YES' : 'NO');
+  console.log('=====================================');
+  
+  return isValid;
 }
 
 async function handleWebhook(req, res) {
+  console.log('Webhook POST received at /api/webhooks/quickbooks');
+  
   // Respond immediately — QB requires a fast 200
   if (!verifySignature(req)) {
+    console.log('Webhook rejected: Invalid signature');
     return res.status(401).json({ error: 'Invalid signature' });
   }
+  
+  console.log('Webhook signature verified ✓');
   res.sendStatus(200);
 
   // Process async after responding
@@ -31,18 +51,28 @@ async function handleWebhook(req, res) {
 
 async function processWebhookPayload(payload) {
   const events = payload?.eventNotifications || [];
+  console.log(`Processing ${events.length} event(s)`);
 
   for (const notification of events) {
     const entities = notification?.dataChangeEvent?.entities || [];
+    console.log(`Event has ${entities.length} entities`);
+    
     for (const entity of entities) {
       const { name, id, operation } = entity;
+      console.log(`Syncing ${name} ${id} (${operation})`);
 
       if (name === 'Item') {
-        await syncItem(id, operation);
+        await syncItem(id, operation).catch(err =>
+          console.error(`Failed to sync item ${id}:`, err.message)
+        );
       } else if (name === 'Invoice') {
-        await syncInvoice(id, operation);
+        await syncInvoice(id, operation).catch(err =>
+          console.error(`Failed to sync invoice ${id}:`, err.message)
+        );
       } else if (name === 'Customer') {
-        await syncCustomer(id, operation);
+        await syncCustomer(id, operation).catch(err =>
+          console.error(`Failed to sync customer ${id}:`, err.message)
+        );
       }
     }
   }
@@ -83,7 +113,14 @@ async function syncInvoice(qbInvoiceId, operation) {
     return;
   }
 
-  const invoice = await fetchQBInvoice(qbInvoiceId);
+  let invoice;
+  try {
+    invoice = await fetchQBInvoice(qbInvoiceId);
+  } catch (err) {
+    console.error(`Failed to fetch QB invoice ${qbInvoiceId}. QB API may be down or token invalid. Skipping.`);
+    return;
+  }
+
   if (!invoice) return;
 
   // If we already have order(s) with this invoice ID they were created by our mobile app — just update total.
@@ -106,7 +143,14 @@ async function syncInvoice(qbInvoiceId, operation) {
     customerId = custResult.rows[0].id;
   } else {
     // Customer not yet in our DB — sync them in.
-    const qbCustomer = await fetchQBCustomer(qbCustomerId);
+    let qbCustomer;
+    try {
+      qbCustomer = await fetchQBCustomer(qbCustomerId);
+    } catch (err) {
+      console.error(`Failed to fetch QB customer ${qbCustomerId}. Skipping invoice sync.`);
+      return;
+    }
+
     const inserted = await pool.query(
       `INSERT INTO customers (qb_customer_id, company_name, first_name, last_name, phone, email, active)
        VALUES ($1, $2, $3, $4, $5, $6, TRUE)
@@ -180,7 +224,14 @@ async function syncCustomer(qbCustomerId, operation) {
     return;
   }
 
-  const customer = await fetchQBCustomer(qbCustomerId);
+  let customer;
+  try {
+    customer = await fetchQBCustomer(qbCustomerId);
+  } catch (err) {
+    console.error(`Failed to fetch QB customer ${qbCustomerId}. Skipping sync.`);
+    return;
+  }
+
   await pool.query(
     `INSERT INTO customers (qb_customer_id, company_name, first_name, last_name, phone, email, active)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
