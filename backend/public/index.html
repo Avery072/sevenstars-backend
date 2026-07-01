@@ -162,6 +162,18 @@
   .detail-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--gray-mid); font-size: 12px; }
   .detail-row:last-child { border-bottom: none; }
   .detail-label { color: var(--gray-dark); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
+
+  @media print {
+    body * { visibility: hidden !important; }
+    #packing-report-area, #packing-report-area * { visibility: visible !important; }
+    #packing-report-area {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      background: white;
+    }
+  }
 </style>
 </head>
 <body>
@@ -259,7 +271,7 @@
             <input type="date" class="form-input" id="packing-date" style="width:150px;">
           </div>
           <button class="btn btn-primary" onclick="loadPackingReport()">GENERATE REPORT</button>
-          <button class="btn btn-outline" id="export-pdf-btn" onclick="exportPackingPDF()" style="display:none;">&#128438; EXPORT PDF</button>
+          <button class="btn btn-outline" id="print-packing-btn" onclick="printPackingReport()" style="display:none;">PRINT</button>
         </div>
         <div id="packing-content">
           <div class="empty-state">Select a date and click Generate Report.</div>
@@ -1074,108 +1086,68 @@ function isSalmon(desc) {
 async function loadPackingReport() {
   const date = document.getElementById('packing-date').value;
   if (!date) return;
-  const orders = await api(`/api/orders?date=${date}`);
   const content = document.getElementById('packing-content');
-  document.getElementById('export-pdf-btn').style.display = 'none';
+  document.getElementById('print-packing-btn').style.display = 'none';
   currentPackingData = null;
 
-  if (!orders || !orders.length) {
+  const report = await api(`/api/admin/packing-report?date=${encodeURIComponent(date)}`);
+  if (!report || report.error) {
+    content.innerHTML = `<div class="empty-state">Failed to load packing report.</div>`;
+    return;
+  }
+
+  currentPackingData = report;
+
+  if (!report.length) {
     content.innerHTML = `<div class="empty-state">No orders for ${date}.</div>`;
     return;
   }
 
-  const details = await Promise.all(orders.map(o => api(`/api/orders/${o.id}`)));
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[ch]));
+  const qty = value => Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
 
-  const salmonItems = [];
-  const otherItems  = [];
+  const sections = report.map(product => {
+    const sku = esc(product.sku || '');
+    const description = esc(product.description || '');
+    const customerRows = (product.customers || []).map(customer => `
+      <tr>
+        <td style="font-weight:bold;">${esc(customer.company_name || '')}</td>
+        <td>${description}</td>
+        <td class="mono">${qty(customer.quantity)}</td>
+        <td class="mono">${esc(customer.unit || product.unit || '')}</td>
+      </tr>`).join('');
 
-  for (const order of details) {
-    const customer = order.company_name || [order.first_name, order.last_name].filter(Boolean).join(' ') || 'Unknown';
-    for (const item of (order.items || [])) {
-      const product = item.description || item.sku;
-      const base = {
-        product, customer,
-        quantity: item.quantity,
-        unit: item.unit,
-        notes: item.notes || order.notes || '',
-      };
-      if (isSalmon(product)) {
-        salmonItems.push({ ...base,
-          cut: order.salmon_cut || '',
-          skin_off: order.skin_off,
-          scale: order.scale,
-          pbo: order.pbo,
-          hg: order.hg,
-        });
-      } else {
-        otherItems.push(base);
-      }
-    }
-  }
+    return `
+      <tbody>
+        <tr>
+          <td colspan="4" style="font-weight:bold;background:var(--gray-light);">[${sku}] (${description})</td>
+        </tr>
+        ${customerRows}
+        <tr>
+          <td colspan="4" style="font-weight:bold;text-align:right;background:#FFFFF0;">Total ${sku}: ${qty(product.total_qty)} ${esc(product.unit || '')}</td>
+        </tr>
+      </tbody>`;
+  }).join('');
 
-  currentPackingData = { date, salmonItems, otherItems };
-
-  const ck = v => v ? '&#10004;' : '—';
-
-  let html = '';
-
-  if (salmonItems.length) {
-    const rows = salmonItems.map((item, i) => `<tr>
-      <td class="mono" style="text-align:center;">${i + 1}</td>
-      <td style="font-weight:bold;">${item.customer}</td>
-      <td>${item.product}</td>
-      <td class="mono">${item.quantity} ${item.unit}</td>
-      <td>${item.cut || '—'}</td>
-      <td style="text-align:center;color:${item.skin_off?'var(--red)':'var(--gray-mid)'};">${ck(item.skin_off)}</td>
-      <td style="text-align:center;color:${item.scale?'var(--red)':'var(--gray-mid)'};">${ck(item.scale)}</td>
-      <td style="text-align:center;color:${item.pbo?'var(--red)':'var(--gray-mid)'};">${ck(item.pbo)}</td>
-      <td style="text-align:center;color:${item.hg?'var(--red)':'var(--gray-mid)'};">${ck(item.hg)}</td>
-      <td style="font-size:11px;color:var(--gray-dark);">${item.notes}</td>
-    </tr>`).join('');
-    html += `
-      <div class="section-bar" style="margin-bottom:0;">SALMON — ${salmonItems.length} line item${salmonItems.length!==1?'s':''}</div>
-      <div class="table-card" style="margin-top:0;border-top:none;margin-bottom:16px;">
+  content.innerHTML = `
+    <div id="packing-report-area">
+      <div class="table-card">
+        <div class="table-header">
+          <div class="table-title">Seven Star Foods — Packing Report — ${esc(date)}</div>
+        </div>
         <table>
-          <thead><tr>
-            <th style="width:36px;">#</th>
-            <th>Customer</th><th>Product</th><th>Qty / Unit</th>
-            <th>Cut</th>
-            <th style="text-align:center;">Skin Off</th>
-            <th style="text-align:center;">Scale</th>
-            <th style="text-align:center;">PBO</th>
-            <th style="text-align:center;">H&amp;G</th>
-            <th>Notes</th>
-          </tr></thead>
-          <tbody>${rows}</tbody>
+          <thead><tr><th>Customer</th><th>Product</th><th>Quantity</th><th>Unit</th></tr></thead>
+          ${sections}
         </table>
-      </div>`;
-  }
+      </div>
+    </div>`;
+  document.getElementById('print-packing-btn').style.display = '';
+}
 
-  if (otherItems.length) {
-    const rows = otherItems.map((item, i) => `<tr>
-      <td class="mono" style="text-align:center;">${i + 1}</td>
-      <td style="font-weight:bold;">${item.customer}</td>
-      <td>${item.product}</td>
-      <td class="mono">${item.quantity} ${item.unit}</td>
-      <td style="font-size:11px;color:var(--gray-dark);">${item.notes}</td>
-    </tr>`).join('');
-    html += `
-      <div class="section-bar" style="margin-bottom:0;">OTHER PRODUCTS — ${otherItems.length} line item${otherItems.length!==1?'s':''}</div>
-      <div class="table-card" style="margin-top:0;border-top:none;">
-        <table>
-          <thead><tr>
-            <th style="width:36px;">#</th>
-            <th>Customer</th><th>Product</th><th>Qty / Unit</th><th>Notes</th>
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>`;
-  }
-
-  if (!html) html = '<div class="empty-state">No line items for this date.</div>';
-
-  content.innerHTML = html;
-  document.getElementById('export-pdf-btn').style.display = '';
+function printPackingReport() {
+  window.print();
 }
 
 function exportPackingPDF() {

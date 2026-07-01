@@ -2,13 +2,14 @@ const express = require('express');
 const router = express.Router();
 const { requireAuth } = require('../middleware/auth');
 const { syncFromQB } = require('../controllers/syncController');
-const { syncPendingInvoices } = require('../controllers/ordersController');
+const { getPackingReport, syncPendingInvoices } = require('../controllers/ordersController');
 const { listPending, approveCustomer, rejectCustomer, listPendingSubUsers, approveSubUser, rejectSubUser, listAllAccounts, deleteAccount } = require('../controllers/approvalController');
 
 router.use(requireAuth);
 
 router.post('/sync-from-qb', syncFromQB);
 router.post('/sync-pending-invoices', syncPendingInvoices);
+router.get('/packing-report', getPackingReport);
 router.get('/pending', listPending);
 router.post('/approve/:id', approveCustomer);
 router.post('/reject/:id', rejectCustomer);

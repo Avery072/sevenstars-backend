@@ -232,6 +232,59 @@ async function deleteOrder(req, res) {
   res.json({ message: 'Order deleted' });
 }
 
+async function getPackingReport(req, res) {
+  const date = req.query.date || null;
+  const result = await pool.query(
+    `SELECT
+       p.id AS product_id,
+       p.sku,
+       p.description,
+       oi.unit,
+       c.id AS customer_id,
+       c.company_name,
+       SUM(oi.quantity)::float AS quantity,
+       COALESCE(string_agg(DISTINCT NULLIF(oi.notes, ''), '; '), '') AS notes
+     FROM orders o
+     JOIN order_items oi ON oi.order_id = o.id
+     JOIN products p ON p.id = oi.product_id
+     JOIN customers c ON c.id = o.customer_id
+     WHERE o.delivery_date = COALESCE($1::date, CURRENT_DATE)
+     GROUP BY p.id, p.sku, p.description, oi.unit, c.id, c.company_name
+     ORDER BY p.description ASC, c.company_name ASC`,
+    [date]
+  );
+
+  const products = [];
+  const productMap = new Map();
+
+  for (const row of result.rows) {
+    const key = `${row.product_id}:${row.unit}`;
+    if (!productMap.has(key)) {
+      const product = {
+        product_id: row.product_id,
+        sku: row.sku,
+        description: row.description,
+        unit: row.unit,
+        total_qty: 0,
+        customers: [],
+      };
+      productMap.set(key, product);
+      products.push(product);
+    }
+
+    const product = productMap.get(key);
+    product.total_qty += Number(row.quantity || 0);
+    product.customers.push({
+      company_name: row.company_name,
+      quantity: Number(row.quantity || 0),
+      unit: row.unit,
+      notes: row.notes || '',
+    });
+  }
+
+  res.json(products);
+}
+
 // Finds all orders without a qb_invoice_id and retries the QB push.
 async function syncPendingInvoices(req, res) {
   const { rows: orders } = await pool.query(
@@ -285,4 +338,4 @@ async function purgeOldOrders() {
   }
 }
 
-module.exports = { listOrders, getOrder, createOrder, deleteOrder, syncPendingInvoices, purgeOldOrders };
+module.exports = { listOrders, getOrder, createOrder, deleteOrder, getPackingReport, syncPendingInvoices, purgeOldOrders };
