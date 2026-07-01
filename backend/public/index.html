@@ -1365,24 +1365,27 @@ function populateDropdowns() {
 function addOrderItemRow() {
   const list = document.getElementById('no-items-list');
   const div = document.createElement('div');
-  div.style.cssText = 'display:grid;grid-template-columns:2fr 80px 70px 80px;gap:6px;align-items:center;';
-  const productOptions = allProducts.map(p => `<option value="${p.id}" data-price="${p.price||0}" data-unit="${p.unit}">${p.description}${p.qb_item_id ? '' : ' [NO QB]'}</option>`).join('');
+  div.style.cssText = 'display:grid;grid-template-columns:2fr 80px 80px auto;gap:6px;align-items:center;';
+  const productOptions = allProducts.map(p =>
+    `<option value="${p.id}" data-price="${p.price||0}" data-unit="${p.unit||''}" data-show-price="${p.show_price ? '1' : '0'}">${p.description}${p.qb_item_id ? '' : ' [NO QB]'}</option>`
+  ).join('');
   div.innerHTML = `
     <select class="form-select" onchange="syncUnit(this)">${productOptions}</select>
     <input class="form-input" placeholder="Qty" type="number" value="1" min="0.01" step="0.01">
-    <select class="form-select"><option>lb</option><option>ea</option><option>CA</option><option>kg</option></select>
-    <input class="form-input price-input" placeholder="Price" type="number" step="0.01">`;
+    <span class="price-unit-display" style="font-size:11px;color:var(--gray-dark);"></span>
+    <span class="price-display" style="font-size:12px;font-weight:bold;text-align:right;white-space:nowrap;"></span>`;
   list.appendChild(div);
+  syncUnit(div.querySelector('select'));
 }
 
 function syncUnit(sel) {
   const row = sel.closest('div');
-  const unitSel = row.querySelectorAll('select')[1];
-  const priceInput = row.querySelector('.price-input');
-  const unit = sel.options[sel.selectedIndex].dataset.unit;
-  const price = sel.options[sel.selectedIndex].dataset.price;
-  if (unit) { for (let i=0; i<unitSel.options.length; i++) { if (unitSel.options[i].value===unit) { unitSel.selectedIndex=i; break; } } }
-  if (price) priceInput.value = parseFloat(price).toFixed(2);
+  const opt = sel.options[sel.selectedIndex];
+  const unit = opt.dataset.unit;
+  const price = opt.dataset.price;
+  const showPrice = opt.dataset.showPrice === '1';
+  row.querySelector('.price-unit-display').textContent = unit || '';
+  row.querySelector('.price-display').textContent = showPrice ? '$' + parseFloat(price || 0).toFixed(2) : 'Market Price';
 }
 
 async function submitOrder() {
@@ -1394,13 +1397,11 @@ async function submitOrder() {
 
   const rows = document.getElementById('no-items-list').querySelectorAll('div');
   const items = Array.from(rows).map(row => {
-    const sels = row.querySelectorAll('select');
-    const inputs = row.querySelectorAll('input');
+    const sel = row.querySelector('select');
+    const input = row.querySelector('input');
     return {
-      product_id: parseInt(sels[0].value),
-      quantity: parseFloat(inputs[0].value) || 0,
-      unit: sels[1].value,
-      unit_price: parseFloat(inputs[1].value) || 0,
+      product_id: parseInt(sel.value),
+      quantity: parseFloat(input.value) || 0,
     };
   }).filter(it => it.quantity > 0);
 

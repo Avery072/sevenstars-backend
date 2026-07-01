@@ -65,11 +65,28 @@ async function createOrder(req, res) {
     return res.status(400).json({ error: 'customer_id, delivery_date, and items are required' });
   }
 
+  // Look up prices and units from DB — client-sent prices are ignored
+  const productIds = items.map(i => i.product_id);
+  const prodResult = await pool.query(
+    'SELECT id, price, unit, qb_item_id FROM products WHERE id = ANY($1) AND active = true',
+    [productIds]
+  );
+  const productMap = Object.fromEntries(prodResult.rows.map(r => [r.id, r]));
+
+  for (const item of items) {
+    if (!productMap[item.product_id]) {
+      return res.status(400).json({ error: `Product ${item.product_id} not found or inactive` });
+    }
+  }
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
-    const newItemsTotal = items.reduce((sum, item) => sum + (item.quantity * (item.unit_price || 0)), 0);
+    const newItemsTotal = items.reduce((sum, item) => {
+      const p = productMap[item.product_id];
+      return sum + parseFloat(item.quantity) * parseFloat(p.price || 0);
+    }, 0);
 
     // Merge into existing order for same customer+delivery_date rather than creating a new row
     const existingOrder = await client.query(
@@ -93,10 +110,11 @@ async function createOrder(req, res) {
     }
 
     for (const item of items) {
+      const p = productMap[item.product_id];
       await client.query(
         `INSERT INTO order_items (order_id, product_id, quantity, unit, unit_price, notes)
          VALUES ($1, $2, $3, $4, $5, $6)`,
-        [order.id, item.product_id, item.quantity, item.unit, item.unit_price, item.notes]
+        [order.id, item.product_id, item.quantity, p.unit, p.price, item.notes || null]
       );
     }
 
