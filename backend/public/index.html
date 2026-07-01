@@ -851,17 +851,27 @@ function renderOrders() {
     const customer = o.company_name || [o.first_name, o.last_name].filter(Boolean).join(' ') || 'Unknown';
     const placedAt = o.order_placed_at ? new Date(o.order_placed_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }) : '—';
     const delivDate = o.delivery_date ? o.delivery_date.slice(0, 10) : '—';
+    const isVoided = o.status === 'voided';
+    const isModified = o.status === 'modified';
     const total = o.total ? '$' + parseFloat(o.total).toFixed(2) : '—';
+    const origTotal = o.original_total ? '$' + parseFloat(o.original_total).toFixed(2) : null;
+    const totalDisplay = isModified && origTotal && origTotal !== total
+      ? `<span style="text-decoration:line-through;color:var(--gray-dark);font-size:11px;">${origTotal}</span> ${total}`
+      : total;
+    const cardStyle = isVoided ? 'opacity:0.5;background:#f5f5f5;' : isModified ? 'background:#fffbe6;border-color:#d4a800;' : '';
+    const statusBadge = isVoided
+      ? '<span class="badge badge-gray" style="margin-left:6px;">VOIDED</span>'
+      : isModified ? '<span class="badge badge-amber" style="margin-left:6px;">MODIFIED</span>' : '';
     return `
-      <div class="order-card" onclick="viewOrder(${o.id})">
+      <div class="order-card" onclick="viewOrder(${o.id})" style="${cardStyle}">
         <div class="order-card-top">
           <div>
-            <div class="order-customer">${customer}</div>
+            <div class="order-customer">${customer}${statusBadge}</div>
             <div class="order-time">Delivery: ${delivDate} &nbsp;|&nbsp; Placed: ${placedAt}</div>
           </div>
         </div>
         <div class="order-footer">
-          <span class="order-total">${total}</span>
+          <span class="order-total">${totalDisplay}</span>
           <button class="action-btn">VIEW &rarr;</button>
         </div>
       </div>`;
@@ -879,11 +889,21 @@ async function viewOrder(id) {
     `<tr><td>${it.description || it.sku}</td><td class="mono">${it.quantity} ${it.unit}</td><td class="mono">${it.unit_price ? '$'+parseFloat(it.unit_price).toFixed(2) : '—'}</td><td>${it.notes || ''}</td></tr>`
   ).join('');
   document.getElementById('detail-title').textContent = `Order #${order.id} — ${customer}`;
+  const isVoided = order.status === 'voided';
+  const isModified = order.status === 'modified';
+  const origTotal = order.original_total ? parseFloat(order.original_total).toFixed(2) : null;
+  const curTotal = order.total ? parseFloat(order.total).toFixed(2) : null;
+  const statusBanner = isVoided
+    ? `<div style="background:#e8e8e8;border:1px solid #bbb;padding:8px 10px;margin-bottom:12px;font-size:11px;font-weight:bold;color:#555;">VOIDED IN QUICKBOOKS — This invoice was deleted from QB.</div>`
+    : isModified && origTotal && origTotal !== curTotal
+    ? `<div style="background:#fffbe6;border:1px solid #d4a800;padding:8px 10px;margin-bottom:12px;font-size:11px;"><strong>MODIFIED IN QUICKBOOKS</strong> — Original total: <span style="text-decoration:line-through;">$${origTotal}</span> → Current: <strong>$${curTotal}</strong></div>`
+    : '';
   document.getElementById('detail-body').innerHTML = `
+    ${statusBanner}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">
       <div><div class="detail-label">Customer</div><div>${customer}</div></div>
       <div><div class="detail-label">Delivery Date</div><div>${order.delivery_date ? order.delivery_date.slice(0,10) : '—'}</div></div>
-      <div><div class="detail-label">Total</div><div style="font-weight:bold;">${order.total ? '$'+parseFloat(order.total).toFixed(2) : '—'}</div></div>
+      <div><div class="detail-label">Total</div><div style="font-weight:bold;">${curTotal ? '$'+curTotal : '—'}</div></div>
       <div><div class="detail-label">Notes</div><div>${order.notes || '—'}</div></div>
     </div>
     ${order.salmon_cut ? `<div style="background:var(--red-light);padding:8px 10px;margin-bottom:12px;font-size:11px;"><strong>Salmon Spec:</strong> ${order.salmon_cut}${order.skin_off?' · Skin Off':''}${order.scale?' · Scale':''}${order.pbo?' · PBO':''}${order.hg?' · H&G':''}</div>` : ''}

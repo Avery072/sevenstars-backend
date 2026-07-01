@@ -81,10 +81,17 @@ async function syncItem(qbItemId, operation) {
 async function processInvoice(invoice) {
   const qbInvoiceId = invoice.Id;
 
-  // If we already have order(s) with this invoice ID they were created by our mobile app — just update total.
-  const existing = await pool.query('SELECT id FROM orders WHERE qb_invoice_id = $1 LIMIT 1', [qbInvoiceId]);
+  // If we already have an order with this invoice ID — update total and flag if it changed.
+  const existing = await pool.query('SELECT id, total FROM orders WHERE qb_invoice_id = $1 LIMIT 1', [qbInvoiceId]);
   if (existing.rows.length) {
-    await pool.query('UPDATE orders SET total = $1 WHERE qb_invoice_id = $2', [parseFloat(invoice.TotalAmt || 0), qbInvoiceId]);
+    const qbTotal = parseFloat(invoice.TotalAmt || 0);
+    const dbTotal = parseFloat(existing.rows[0].total || 0);
+    if (Math.abs(qbTotal - dbTotal) > 0.005) {
+      await pool.query(
+        'UPDATE orders SET total = $1, status = $2 WHERE qb_invoice_id = $3',
+        [qbTotal, 'modified', qbInvoiceId]
+      );
+    }
     return 'updated';
   }
 
@@ -171,9 +178,8 @@ async function processInvoice(invoice) {
 
 async function syncInvoice(qbInvoiceId, operation) {
   if (operation === 'Delete') {
-    // Leave qb_invoice_id intact — nulling it would make the order appear as "unpushed"
-    // and trigger an unwanted re-push. The appendToQBInvoice fallback handles stale IDs.
-    console.log(`QB invoice ${qbInvoiceId} deleted in QB — order record kept as-is`);
+    await pool.query('UPDATE orders SET status = $1 WHERE qb_invoice_id = $2', ['voided', qbInvoiceId]);
+    console.log(`QB invoice ${qbInvoiceId} voided in QB — order marked voided`);
     return;
   }
   const invoice = await fetchQBInvoice(qbInvoiceId);

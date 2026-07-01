@@ -202,6 +202,22 @@ async function getOrCreateQBItemCategory(categoryName) {
   }
 }
 
+async function deleteQBInvoice(qbInvoiceId) {
+  try {
+    const client = await getQBClient();
+    const { data } = await client.get(`/invoice/${qbInvoiceId}?minorversion=65`);
+    const inv = data.Invoice;
+    await client.post(`/invoice?operation=delete&minorversion=65`, {
+      Id: inv.Id,
+      SyncToken: inv.SyncToken,
+    });
+    console.log(`QB invoice ${qbInvoiceId} deleted`);
+  } catch (err) {
+    logQBError(`QB invoice delete ${qbInvoiceId}`, err);
+    throw err;
+  }
+}
+
 async function deleteQBItem(qbItemId) {
   try {
     const client = await getQBClient();
@@ -286,6 +302,7 @@ module.exports = {
   fetchQBInvoice,
   createQBInvoice,
   appendToQBInvoice,
+  deleteQBInvoice,
   createQBCustomer,
   createQBItem,
   getOrCreateQBItemCategory,

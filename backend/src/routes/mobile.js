@@ -64,8 +64,8 @@ router.post('/orders', async (req, res) => {
       await client.query('UPDATE orders SET total = total + $1 WHERE id = $2', [newItemsTotal, orderId]);
     } else {
       const orderResult = await client.query(
-        `INSERT INTO orders (customer_id, delivery_date, notes, total)
-         VALUES ($1, $2, $3, $4) RETURNING id`,
+        `INSERT INTO orders (customer_id, delivery_date, notes, total, original_total)
+         VALUES ($1, $2, $3, $4, $4) RETURNING id`,
         [customer_id, delivery_date, notes || null, newItemsTotal]
       );
       orderId = orderResult.rows[0].id;

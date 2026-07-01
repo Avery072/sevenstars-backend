@@ -1,5 +1,5 @@
 const pool = require('../config/db');
-const { createQBInvoice, appendToQBInvoice, createQBCustomer, getQBClient } = require('../middleware/qbSync');
+const { createQBInvoice, appendToQBInvoice, createQBCustomer, getQBClient, deleteQBInvoice } = require('../middleware/qbSync');
 
 async function listOrders(req, res) {
   const { date, customer_id } = req.query;
@@ -85,8 +85,8 @@ async function createOrder(req, res) {
       order = updated.rows[0];
     } else {
       const orderResult = await client.query(
-        `INSERT INTO orders (customer_id, delivery_date, notes, total)
-         VALUES ($1, $2, $3, $4) RETURNING *`,
+        `INSERT INTO orders (customer_id, delivery_date, notes, total, original_total)
+         VALUES ($1, $2, $3, $4, $4) RETURNING *`,
         [customer_id, delivery_date, notes, newItemsTotal]
       );
       order = orderResult.rows[0];
@@ -241,8 +241,18 @@ async function pushToQB(order, items) {
 
 async function deleteOrder(req, res) {
   const { id } = req.params;
-  const result = await pool.query('DELETE FROM orders WHERE id = $1 RETURNING id', [id]);
-  if (!result.rows.length) return res.status(404).json({ error: 'Order not found' });
+  const lookup = await pool.query('SELECT qb_invoice_id FROM orders WHERE id = $1', [id]);
+  if (!lookup.rows.length) return res.status(404).json({ error: 'Order not found' });
+  const { qb_invoice_id } = lookup.rows[0];
+
+  await pool.query('DELETE FROM orders WHERE id = $1', [id]);
+
+  if (qb_invoice_id) {
+    deleteQBInvoice(qb_invoice_id).catch(err =>
+      console.warn(`QB invoice ${qb_invoice_id} delete failed (may already be voided):`, err.message)
+    );
+  }
+
   res.json({ message: 'Order deleted' });
 }
 
