@@ -228,7 +228,7 @@
       <div style="font-size:11px;color:var(--gray-dark);" id="topbar-date"></div>
       <div class="topbar-right">
         <button class="btn btn-outline" id="sync-pending-btn" onclick="syncPendingInvoices()" style="display:none;font-size:11px;">&#8635; SYNC PENDING TO QB</button>
-        <button class="btn btn-outline" id="sync-invoices-btn" onclick="syncInvoicesFromQB()" style="font-size:11px;">&#8595; PULL INVOICES FROM QB</button>
+        <button class="btn btn-outline" id="sync-invoices-btn" onclick="openQBPullModal()" style="font-size:11px;">&#8595; PULL INVOICES FROM QB</button>
         <button class="btn btn-primary" id="topbar-btn" onclick="handleTopbarBtn()">+ NEW ORDER</button>
       </div>
     </div>
@@ -505,6 +505,25 @@
       <button class="modal-close" onclick="closeModal('modal-order-detail')">X</button>
     </div>
     <div class="modal-body" id="detail-body">Loading...</div>
+    <div class="modal-footer" id="detail-footer"></div>
+  </div>
+</div>
+
+<!-- MODAL: QB Pull Range -->
+<div class="modal-overlay" id="modal-qb-range">
+  <div class="modal" style="max-width:320px;">
+    <div class="modal-head">
+      <div class="modal-title">Pull Invoices from QB</div>
+      <button class="modal-close" onclick="closeModal('modal-qb-range')">X</button>
+    </div>
+    <div class="modal-body">
+      <p style="margin:0 0 12px;font-size:12px;color:var(--gray-dark);">Choose time range to sync from QuickBooks:</p>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <button class="btn btn-outline" style="text-align:left;" onclick="doSyncInvoices(3)">Past 3 Days</button>
+        <button class="btn btn-outline" style="text-align:left;" onclick="doSyncInvoices(7)">Past Week</button>
+        <button class="btn btn-outline" style="text-align:left;" onclick="doSyncInvoices(30)">Past Month</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -766,11 +785,19 @@ async function loadAll() {
 }
 
 /* ── Sync pending invoices ── */
-async function syncInvoicesFromQB() {
+function openQBPullModal() {
+  openModal('modal-qb-range');
+}
+
+async function doSyncInvoices(days) {
+  closeModal('modal-qb-range');
   const btn = document.getElementById('sync-invoices-btn');
   btn.textContent = '⏳ Pulling...';
   btn.disabled = true;
-  const res = await api('/api/admin/sync-invoices-from-qb', { method: 'POST' });
+  const since = new Date();
+  since.setDate(since.getDate() - (days - 1));
+  const date = since.toISOString().slice(0, 10);
+  const res = await api(`/api/admin/sync-invoices-from-qb?date=${date}`, { method: 'POST' });
   btn.disabled = false;
   btn.textContent = '↓ PULL INVOICES FROM QB';
   if (res) {
@@ -844,6 +871,7 @@ function renderOrders() {
 async function viewOrder(id) {
   openModal('modal-order-detail');
   document.getElementById('detail-body').innerHTML = 'Loading...';
+  document.getElementById('detail-footer').innerHTML = '';
   const order = await api(`/api/orders/${id}`);
   if (!order) return;
   const customer = order.company_name || [order.first_name, order.last_name].filter(Boolean).join(' ') || 'Unknown';
@@ -863,6 +891,20 @@ async function viewOrder(id) {
       <thead><tr><th>Product</th><th>Qty</th><th>Unit Price</th><th>Notes</th></tr></thead>
       <tbody>${items || '<tr><td colspan="4" class="empty-state">No line items</td></tr>'}</tbody>
     </table>`;
+  document.getElementById('detail-footer').innerHTML =
+    `<button class="btn" style="background:var(--red);color:white;border-color:var(--red-dark);" onclick="deleteOrder(${order.id})">DELETE ORDER</button>`;
+}
+
+async function deleteOrder(id) {
+  if (!confirm(`Delete order #${id}? This cannot be undone.`)) return;
+  const res = await api(`/api/orders/${id}`, { method: 'DELETE' });
+  if (res) {
+    closeModal('modal-order-detail');
+    allOrders = allOrders.filter(o => o.id !== id);
+    renderOrders();
+    updateStats();
+    checkPendingInvoices();
+  }
 }
 
 /* ── Products ── */

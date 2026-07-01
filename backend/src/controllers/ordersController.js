@@ -69,14 +69,28 @@ async function createOrder(req, res) {
   try {
     await client.query('BEGIN');
 
-    const total = items.reduce((sum, item) => sum + (item.quantity * (item.unit_price || 0)), 0);
+    const newItemsTotal = items.reduce((sum, item) => sum + (item.quantity * (item.unit_price || 0)), 0);
 
-    const orderResult = await client.query(
-      `INSERT INTO orders (customer_id, delivery_date, notes, total)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [customer_id, delivery_date, notes, total]
+    // Merge into existing order for same customer+delivery_date rather than creating a new row
+    const existingOrder = await client.query(
+      'SELECT id FROM orders WHERE customer_id = $1 AND delivery_date = $2 ORDER BY id ASC LIMIT 1',
+      [customer_id, delivery_date]
     );
-    const order = orderResult.rows[0];
+
+    let order;
+    if (existingOrder.rows.length) {
+      const orderId = existingOrder.rows[0].id;
+      await client.query('UPDATE orders SET total = total + $1 WHERE id = $2', [newItemsTotal, orderId]);
+      const updated = await client.query('SELECT * FROM orders WHERE id = $1', [orderId]);
+      order = updated.rows[0];
+    } else {
+      const orderResult = await client.query(
+        `INSERT INTO orders (customer_id, delivery_date, notes, total)
+         VALUES ($1, $2, $3, $4) RETURNING *`,
+        [customer_id, delivery_date, notes, newItemsTotal]
+      );
+      order = orderResult.rows[0];
+    }
 
     for (const item of items) {
       await client.query(

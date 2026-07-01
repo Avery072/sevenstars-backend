@@ -47,34 +47,46 @@ router.post('/orders', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const total = items.reduce((sum, item) => {
+    const newItemsTotal = items.reduce((sum, item) => {
       const p = productMap[item.product_id];
       return sum + parseFloat(item.quantity) * parseFloat(p.price || 0);
     }, 0);
 
-    const orderResult = await client.query(
-      `INSERT INTO orders (customer_id, delivery_date, notes, total)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [customer_id, delivery_date, notes || null, total]
+    // Merge into existing order for same customer+delivery_date rather than creating a new row
+    const existingOrder = await client.query(
+      'SELECT id FROM orders WHERE customer_id = $1 AND delivery_date = $2 LIMIT 1',
+      [customer_id, delivery_date]
     );
-    const order = orderResult.rows[0];
+
+    let orderId;
+    if (existingOrder.rows.length) {
+      orderId = existingOrder.rows[0].id;
+      await client.query('UPDATE orders SET total = total + $1 WHERE id = $2', [newItemsTotal, orderId]);
+    } else {
+      const orderResult = await client.query(
+        `INSERT INTO orders (customer_id, delivery_date, notes, total)
+         VALUES ($1, $2, $3, $4) RETURNING id`,
+        [customer_id, delivery_date, notes || null, newItemsTotal]
+      );
+      orderId = orderResult.rows[0].id;
+    }
 
     for (const item of items) {
       const p = productMap[item.product_id];
       await client.query(
         `INSERT INTO order_items (order_id, product_id, quantity, unit, unit_price, notes)
          VALUES ($1, $2, $3, $4, $5, $6)`,
-        [order.id, item.product_id, item.quantity, p.unit, p.price, item.notes || null]
+        [orderId, item.product_id, item.quantity, p.unit, p.price, item.notes || null]
       );
     }
 
     await client.query('COMMIT');
 
-    pushToQB(order, items, productMap).catch(err =>
+    pushToQB({ id: orderId, customer_id, delivery_date, notes: notes || null }, items, productMap).catch(err =>
       console.error('QB invoice push failed for mobile order:', err.message)
     );
 
-    res.status(201).json({ message: 'Order placed successfully', order_id: order.id });
+    res.status(201).json({ message: 'Order placed successfully', order_id: orderId });
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
