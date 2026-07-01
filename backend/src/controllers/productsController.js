@@ -55,6 +55,7 @@ async function syncFallbackNonInventory(product, itemPayload, reason) {
 
   const qbItem = await createQBItem({
     Name: itemPayload.Name,
+    Sku: itemPayload.Sku,
     Description: itemPayload.Description,
     Type: 'NonInventory',
     UnitPrice: itemPayload.UnitPrice,
@@ -91,20 +92,21 @@ async function createProduct(req, res) {
     inv_start_date,
   } = req.body;
 
-  if (!sku || !description || !unit) {
-    return res.status(400).json({ error: 'sku, description, and unit are required' });
+  if (!description || !unit) {
+    return res.status(400).json({ error: 'description and unit are required' });
   }
   if (!PRODUCT_CATEGORIES.includes(category)) {
     return res.status(400).json({ error: 'Valid category is required' });
   }
 
+  const productSku = sku || '';
   const existing = await pool.query(
     'SELECT id, sku, description FROM products WHERE LOWER(sku) = LOWER($1) OR LOWER(description) = LOWER($2)',
-    [sku, description]
+    [productSku, description]
   );
   if (existing.rows.length > 0) {
     const dup = existing.rows[0];
-    const field = dup.sku.toLowerCase() === sku.toLowerCase() ? `SKU "${dup.sku}"` : `description "${dup.description}"`;
+    const field = dup.sku.toLowerCase() === productSku.toLowerCase() ? `SKU "${dup.sku}"` : `description "${dup.description}"`;
     return res.status(409).json({ error: `A product with ${field} already exists` });
   }
 
@@ -112,7 +114,7 @@ async function createProduct(req, res) {
     `INSERT INTO products (sku, description, category, unit, cost, price, show_price, reorder_point, vendor, quantity_on_hand)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
     [
-      sku,
+      productSku,
       description,
       category,
       unit,
@@ -132,7 +134,8 @@ async function createProduct(req, res) {
     kg: ' by kg',
   }[unit] || '';
   const fallbackPayload = {
-    Name: sku,
+    Name: description,
+    Sku: productSku,
     Description: `${description}${qbDescriptionSuffix}`,
     UnitPrice: price || 0,
     PurchaseCost: cost || 0,

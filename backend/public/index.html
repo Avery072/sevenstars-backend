@@ -1396,8 +1396,8 @@ async function submitNewProduct() {
   const description = document.getElementById('np-description').value.trim();
   const unit = document.getElementById('np-unit').value.trim();
 
-  if (!sku || !description || !unit) {
-    return showErr(errEl, 'SKU, Description, and Unit are required');
+  if (!description || !unit) {
+    return showErr(errEl, 'Description and Unit are required');
   }
 
   const body = {
