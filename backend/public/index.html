@@ -260,6 +260,7 @@
           </div>
           <button class="btn btn-primary" onclick="loadPackingReport()">GENERATE REPORT</button>
           <button class="btn btn-outline" id="export-pdf-btn" onclick="exportPackingPDF()" style="display:none;">&#128438; EXPORT PDF</button>
+          <button class="btn btn-outline" onclick="downloadDailyPull()" style="font-size:11px;">&#128229; DAILY PULL (.xlsx)</button>
         </div>
         <div id="packing-content">
           <div class="empty-state">Select a date and click Generate Report.</div>
@@ -1284,6 +1285,22 @@ ${body || '<p style="color:#888;font-style:italic;">No items for this date.</p>'
   const win = window.open('', '_blank');
   win.document.write(html);
   win.document.close();
+}
+
+async function downloadDailyPull() {
+  const date = document.getElementById('packing-date').value;
+  if (!date) { alert('Select a delivery date first.'); return; }
+  const res = await fetch(`/api/admin/daily-pull?date=${date}`, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  });
+  if (!res.ok) { const e = await res.json(); alert(e.error || 'Failed to generate report'); return; }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `daily-pull-${date}.xlsx`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 /* ── New Order modal ── */
