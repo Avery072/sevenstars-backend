@@ -9,25 +9,28 @@ async function generateDailyPull(req, res) {
 
   const result = await pool.query(
     `SELECT
+       p.id           AS product_id,
        p.description  AS product_name,
+       p.unit         AS canonical_unit,
        c.company_name,
-       SUM(oi.quantity) AS qty,
-       oi.unit
+       SUM(oi.quantity) AS qty
      FROM orders o
      JOIN order_items oi ON oi.order_id = o.id
      JOIN products    p  ON p.id = oi.product_id
      JOIN customers   c  ON c.id = o.customer_id
      WHERE o.delivery_date = $1
-     GROUP BY p.description, c.company_name, oi.unit
+     GROUP BY p.id, p.description, p.unit, c.company_name
      ORDER BY p.description, c.company_name`,
     [date]
   );
 
-  // Group by product
-  const byProduct = {};
+  // Group by product id so same product from multiple customers/orders stays together
+  const byProduct = new Map();
   for (const row of result.rows) {
-    if (!byProduct[row.product_name]) byProduct[row.product_name] = [];
-    byProduct[row.product_name].push(row);
+    if (!byProduct.has(row.product_id)) {
+      byProduct.set(row.product_id, { name: row.product_name, unit: row.canonical_unit, rows: [] });
+    }
+    byProduct.get(row.product_id).rows.push(row);
   }
 
   const aoa = [];
@@ -42,14 +45,14 @@ async function generateDailyPull(req, res) {
 
   const totalRowIndices = [];
 
-  for (const [productName, rows] of Object.entries(byProduct)) {
-    aoa.push([productName]);
+  for (const { name, unit, rows } of byProduct.values()) {
+    aoa.push([name]);
     for (const row of rows) {
-      aoa.push([row.company_name, '', parseFloat(row.qty), row.unit]);
+      aoa.push([row.company_name, '', parseFloat(row.qty), unit]);
     }
     const totalQty = rows.reduce((sum, r) => sum + parseFloat(r.qty), 0);
     totalRowIndices.push(aoa.length);
-    aoa.push(['total =', '', totalQty, rows[0].unit]);
+    aoa.push(['total =', '', totalQty, unit]);
     aoa.push([]);
   }
 
