@@ -77,15 +77,101 @@ async function syncItem(qbItemId, operation) {
 }
 
 async function syncInvoice(qbInvoiceId, operation) {
-  const invoice = await fetchQBInvoice(qbInvoiceId);
-  // Map QB invoice status to our status
-  const statusMap = { 'EmailSent': 'processing', 'Paid': 'complete' };
-  const status = statusMap[invoice.EmailStatus] || 'pending';
+  if (operation === 'Delete') {
+    await pool.query('UPDATE orders SET qb_invoice_id = NULL WHERE qb_invoice_id = $1', [qbInvoiceId]);
+    console.log(`QB invoice ${qbInvoiceId} deleted — unlinked from orders`);
+    return;
+  }
 
-  await pool.query(
-    `UPDATE orders SET status = $1 WHERE qb_invoice_id = $2`,
-    [status, qbInvoiceId]
-  );
+  const invoice = await fetchQBInvoice(qbInvoiceId);
+  if (!invoice) return;
+
+  // If we already have order(s) with this invoice ID they were created by our mobile app — just update total.
+  const existing = await pool.query('SELECT id FROM orders WHERE qb_invoice_id = $1 LIMIT 1', [qbInvoiceId]);
+  if (existing.rows.length) {
+    await pool.query('UPDATE orders SET total = $1 WHERE qb_invoice_id = $2', [parseFloat(invoice.TotalAmt || 0), qbInvoiceId]);
+    return;
+  }
+
+  // Invoice was created directly in QB — resolve the customer.
+  const qbCustomerId = invoice.CustomerRef?.value;
+  if (!qbCustomerId) {
+    console.warn(`QB invoice ${qbInvoiceId} has no CustomerRef — skipping`);
+    return;
+  }
+
+  let customerId;
+  const custResult = await pool.query('SELECT id FROM customers WHERE qb_customer_id = $1', [qbCustomerId]);
+  if (custResult.rows.length) {
+    customerId = custResult.rows[0].id;
+  } else {
+    // Customer not yet in our DB — sync them in.
+    const qbCustomer = await fetchQBCustomer(qbCustomerId);
+    const inserted = await pool.query(
+      `INSERT INTO customers (qb_customer_id, company_name, first_name, last_name, phone, email, active)
+       VALUES ($1, $2, $3, $4, $5, $6, TRUE)
+       ON CONFLICT (qb_customer_id) DO UPDATE
+         SET company_name = EXCLUDED.company_name, first_name = EXCLUDED.first_name,
+             last_name = EXCLUDED.last_name, phone = EXCLUDED.phone,
+             email = EXCLUDED.email, active = EXCLUDED.active
+       RETURNING id`,
+      [
+        qbCustomer.Id,
+        qbCustomer.CompanyName || [qbCustomer.GivenName, qbCustomer.FamilyName].filter(Boolean).join(' '),
+        qbCustomer.GivenName || null,
+        qbCustomer.FamilyName || null,
+        qbCustomer.PrimaryPhone?.FreeFormNumber || null,
+        qbCustomer.PrimaryEmailAddr?.Address || null,
+      ]
+    );
+    customerId = inserted.rows[0].id;
+  }
+
+  const deliveryDate = invoice.TxnDate; // YYYY-MM-DD
+  const notes = invoice.CustomerMemo?.value || null;
+  const total = parseFloat(invoice.TotalAmt || 0);
+  const salesLines = (invoice.Line || []).filter(l => l.DetailType === 'SalesItemLineDetail');
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const orderResult = await client.query(
+      `INSERT INTO orders (qb_invoice_id, customer_id, delivery_date, notes, total)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+      [qbInvoiceId, customerId, deliveryDate, notes, total]
+    );
+    const orderId = orderResult.rows[0].id;
+
+    let itemsInserted = 0;
+    for (const line of salesLines) {
+      const qbItemId = line.SalesItemLineDetail?.ItemRef?.value;
+      if (!qbItemId) continue;
+
+      const prodResult = await client.query('SELECT id, unit FROM products WHERE qb_item_id = $1', [qbItemId]);
+      if (!prodResult.rows.length) continue; // item not yet synced to our products table
+
+      const product = prodResult.rows[0];
+      const qty = parseFloat(line.SalesItemLineDetail?.Qty || 0);
+      const unitPrice = parseFloat(line.SalesItemLineDetail?.UnitPrice || 0);
+      const lineNotes = line.Description || null;
+
+      await client.query(
+        `INSERT INTO order_items (order_id, product_id, quantity, unit, unit_price, notes)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [orderId, product.id, qty, product.unit, unitPrice, lineNotes]
+      );
+      itemsInserted++;
+    }
+
+    await client.query('COMMIT');
+    console.log(`QB invoice ${qbInvoiceId} → order ${orderId} created (${itemsInserted} line items)`);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 async function syncCustomer(qbCustomerId, operation) {
