@@ -126,9 +126,14 @@ async function createProduct(req, res) {
   );
 
   const product = result.rows[0];
+  const qbDescriptionSuffix = {
+    ea: ' each',
+    lb: ' by lb',
+    kg: ' by kg',
+  }[unit] || '';
   const fallbackPayload = {
     Name: sku,
-    Description: description,
+    Description: `${description}${qbDescriptionSuffix}`,
     UnitPrice: price || 0,
     PurchaseCost: cost || 0,
   };
