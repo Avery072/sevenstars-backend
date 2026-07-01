@@ -165,6 +165,7 @@
 </style>
 </head>
 <body>
+<div id="toast" style="display:none;position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:1000;background:#2E7D32;color:white;padding:10px 16px;border:1px solid #1B5E20;font-size:12px;font-weight:bold;box-shadow:3px 3px 0 rgba(0,0,0,0.2);"></div>
 
 <!-- LOGIN -->
 <div id="login-screen">
@@ -553,7 +554,8 @@
         <div class="form-group">
           <label>Category</label>
           <select id="np-category">
-            <option value="White Fish / Premium Fish" selected>White Fish / Premium Fish</option>
+            <option value="" selected disabled>Select a category</option>
+            <option value="White Fish / Premium Fish">White Fish / Premium Fish</option>
             <option value="Salmon">Salmon</option>
             <option value="Tuna">Tuna</option>
             <option value="Shrimp / Ebi">Shrimp / Ebi</option>
@@ -584,7 +586,7 @@
           <input id="np-cost" type="number" step="0.01" placeholder="0.00" />
         </div>
         <div class="form-group">
-          <label>Price</label>
+          <label>Sales price/rate</label>
           <input id="np-price" type="number" step="0.01" placeholder="0.00" />
         </div>
         <div class="form-group">
@@ -1395,16 +1397,29 @@ async function submitNewProduct() {
   const sku = document.getElementById('np-sku').value.trim();
   const description = document.getElementById('np-description').value.trim();
   const unit = document.getElementById('np-unit').value.trim();
+  const category = document.getElementById('np-category').value.trim();
 
   if (!description || !unit) {
     return showErr(errEl, 'Description and Unit are required');
+  }
+  if (!category) {
+    return showErr(errEl, 'Category is required');
+  }
+
+  const normalizedSku = sku.toLowerCase();
+  const normalizedDescription = description.toLowerCase();
+  if (normalizedSku && allProducts.some(p => (p.sku || '').trim().toLowerCase() === normalizedSku)) {
+    return showErr(errEl, 'A product with this SKU already exists');
+  }
+  if (allProducts.some(p => (p.description || '').trim().toLowerCase() === normalizedDescription)) {
+    return showErr(errEl, 'A product with this name already exists');
   }
 
   const body = {
     sku,
     description,
     unit,
-    category: document.getElementById('np-category').value.trim() || null,
+    category,
     vendor: document.getElementById('np-vendor').value.trim() || null,
     cost: parseFloat(document.getElementById('np-cost').value) || 0,
     price: parseFloat(document.getElementById('np-price').value) || 0,
@@ -1423,9 +1438,10 @@ async function submitNewProduct() {
       renderProducts(productSearchQuery);
       updateStats();
       closeModal('modal-product');
+      showToast(`✓ ${description} created successfully`);
       ['np-sku','np-description','np-unit','np-vendor',
        'np-cost','np-price','np-reorder','np-qty','np-inv-date'].forEach(id => document.getElementById(id).value = '');
-      document.getElementById('np-category').value = 'White Fish / Premium Fish';
+      document.getElementById('np-category').value = '';
       document.getElementById('np-show-price').checked = true;
     } else {
       showErr(errEl, (res && res.error) || 'Failed to create product');
@@ -1488,6 +1504,14 @@ document.querySelectorAll('.modal-overlay').forEach(m => {
 });
 
 function showErr(el, msg) { el.textContent = msg; el.style.display = 'block'; }
+function showToast(msg) {
+  const toast = document.getElementById('toast');
+  if (!toast) return;
+  toast.textContent = msg;
+  toast.style.display = 'block';
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => { toast.style.display = 'none'; }, 3000);
+}
 
 /* ── User Accounts ── */
 let allAccountRows = [];
