@@ -71,7 +71,7 @@ async function fetchQBInvoice(invoiceId) {
 async function createQBInvoice(invoicePayload) {
   try {
     const client = await getQBClient();
-    const { data } = await client.post('/invoice?minorversion=65', invoicePayload);
+    const { data } = await client.post('/invoice?minorversion=65&AutoDocNumber=true', invoicePayload);
     return data.Invoice;
   } catch (err) {
     logQBError('QB invoice creation', err);
