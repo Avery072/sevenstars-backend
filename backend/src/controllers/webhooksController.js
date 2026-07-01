@@ -76,28 +76,23 @@ async function syncItem(qbItemId, operation) {
   );
 }
 
-async function syncInvoice(qbInvoiceId, operation) {
-  if (operation === 'Delete') {
-    await pool.query('UPDATE orders SET qb_invoice_id = NULL WHERE qb_invoice_id = $1', [qbInvoiceId]);
-    console.log(`QB invoice ${qbInvoiceId} deleted — unlinked from orders`);
-    return;
-  }
-
-  const invoice = await fetchQBInvoice(qbInvoiceId);
-  if (!invoice) return;
+// processInvoice handles a full QB Invoice object — used by both the webhook and the bulk sync.
+// Returns 'created', 'updated', or 'skipped'.
+async function processInvoice(invoice) {
+  const qbInvoiceId = invoice.Id;
 
   // If we already have order(s) with this invoice ID they were created by our mobile app — just update total.
   const existing = await pool.query('SELECT id FROM orders WHERE qb_invoice_id = $1 LIMIT 1', [qbInvoiceId]);
   if (existing.rows.length) {
     await pool.query('UPDATE orders SET total = $1 WHERE qb_invoice_id = $2', [parseFloat(invoice.TotalAmt || 0), qbInvoiceId]);
-    return;
+    return 'updated';
   }
 
   // Invoice was created directly in QB — resolve the customer.
   const qbCustomerId = invoice.CustomerRef?.value;
   if (!qbCustomerId) {
     console.warn(`QB invoice ${qbInvoiceId} has no CustomerRef — skipping`);
-    return;
+    return 'skipped';
   }
 
   let customerId;
@@ -105,7 +100,6 @@ async function syncInvoice(qbInvoiceId, operation) {
   if (custResult.rows.length) {
     customerId = custResult.rows[0].id;
   } else {
-    // Customer not yet in our DB — sync them in.
     const qbCustomer = await fetchQBCustomer(qbCustomerId);
     const inserted = await pool.query(
       `INSERT INTO customers (qb_customer_id, company_name, first_name, last_name, phone, email, active)
@@ -127,7 +121,7 @@ async function syncInvoice(qbInvoiceId, operation) {
     customerId = inserted.rows[0].id;
   }
 
-  const deliveryDate = invoice.TxnDate; // YYYY-MM-DD
+  const deliveryDate = invoice.TxnDate;
   const notes = invoice.CustomerMemo?.value || null;
   const total = parseFloat(invoice.TotalAmt || 0);
   const salesLines = (invoice.Line || []).filter(l => l.DetailType === 'SalesItemLineDetail');
@@ -149,7 +143,7 @@ async function syncInvoice(qbInvoiceId, operation) {
       if (!qbItemId) continue;
 
       const prodResult = await client.query('SELECT id, unit FROM products WHERE qb_item_id = $1', [qbItemId]);
-      if (!prodResult.rows.length) continue; // item not yet synced to our products table
+      if (!prodResult.rows.length) continue;
 
       const product = prodResult.rows[0];
       const qty = parseFloat(line.SalesItemLineDetail?.Qty || 0);
@@ -166,12 +160,24 @@ async function syncInvoice(qbInvoiceId, operation) {
 
     await client.query('COMMIT');
     console.log(`QB invoice ${qbInvoiceId} → order ${orderId} created (${itemsInserted} line items)`);
+    return 'created';
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
   } finally {
     client.release();
   }
+}
+
+async function syncInvoice(qbInvoiceId, operation) {
+  if (operation === 'Delete') {
+    await pool.query('UPDATE orders SET qb_invoice_id = NULL WHERE qb_invoice_id = $1', [qbInvoiceId]);
+    console.log(`QB invoice ${qbInvoiceId} deleted — unlinked from orders`);
+    return;
+  }
+  const invoice = await fetchQBInvoice(qbInvoiceId);
+  if (!invoice) return;
+  await processInvoice(invoice);
 }
 
 async function syncCustomer(qbCustomerId, operation) {
@@ -203,4 +209,4 @@ async function syncCustomer(qbCustomerId, operation) {
   );
 }
 
-module.exports = { handleWebhook, syncInvoice };
+module.exports = { handleWebhook, syncInvoice, processInvoice };

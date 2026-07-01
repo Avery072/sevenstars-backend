@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const { queryQBAll } = require('../middleware/qbSync');
-const { syncInvoice } = require('./webhooksController');
+const { processInvoice } = require('./webhooksController');
+const { getQBClient } = require('../middleware/qbSync');
 
 async function syncFromQB(req, res) {
   let items, customers;
@@ -105,9 +106,23 @@ async function upsertCustomers(customers) {
 }
 
 async function syncInvoicesFromQB(req, res) {
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const sinceStr = req.query.date || today;
+
   let invoices;
   try {
-    invoices = await queryQBAll('Invoice');
+    const client = await getQBClient();
+    const pageSize = 1000;
+    let startPosition = 1;
+    invoices = [];
+    while (true) {
+      const query = `SELECT * FROM Invoice WHERE TxnDate >= '${sinceStr}' MAXRESULTS ${pageSize} STARTPOSITION ${startPosition}`;
+      const { data } = await client.get(`/query?query=${encodeURIComponent(query)}&minorversion=65`);
+      const rows = data?.QueryResponse?.Invoice || [];
+      invoices.push(...rows);
+      if (rows.length < pageSize) break;
+      startPosition += pageSize;
+    }
   } catch (err) {
     if (err.message?.includes('Refresh token')) {
       return res.status(401).json({ error: 'QB token expired. Re-authorize at /api/auth/qb' });
@@ -118,18 +133,17 @@ async function syncInvoicesFromQB(req, res) {
   let created = 0, updated = 0, skipped = 0;
   for (const inv of invoices) {
     try {
-      const before = await pool.query('SELECT id FROM orders WHERE qb_invoice_id = $1 LIMIT 1', [inv.Id]);
-      await syncInvoice(inv.Id, 'Update');
-      const after = await pool.query('SELECT id FROM orders WHERE qb_invoice_id = $1 LIMIT 1', [inv.Id]);
-      if (!before.rows.length && after.rows.length) created++;
-      else if (before.rows.length) updated++;
+      const result = await processInvoice(inv);
+      if (result === 'created') created++;
+      else if (result === 'updated') updated++;
+      else skipped++;
     } catch (err) {
       console.error(`Failed to sync QB invoice ${inv.Id}:`, err.message);
       skipped++;
     }
   }
 
-  res.json({ message: 'Invoice sync complete', created, updated, skipped });
+  res.json({ message: 'Invoice sync complete', date: sinceStr, total: invoices.length, created, updated, skipped });
 }
 
 module.exports = { syncFromQB, syncInvoicesFromQB };
