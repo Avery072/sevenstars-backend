@@ -68,10 +68,22 @@ async function fetchQBInvoice(invoiceId) {
   }
 }
 
+async function getNextDocNumber(client) {
+  try {
+    const query = `SELECT DocNumber FROM Invoice ORDER BY MetaData.CreateTime DESC MAXRESULTS 1`;
+    const { data } = await client.get(`/query?query=${encodeURIComponent(query)}&minorversion=65`);
+    const last = data?.QueryResponse?.Invoice?.[0]?.DocNumber;
+    if (last && /^\d+$/.test(last)) return String(parseInt(last, 10) + 1);
+  } catch (_) {}
+  return undefined; // fall back to QB default if query fails
+}
+
 async function createQBInvoice(invoicePayload) {
   try {
     const client = await getQBClient();
-    const { data } = await client.post('/invoice?minorversion=65&AutoDocNumber=true', invoicePayload);
+    const docNumber = await getNextDocNumber(client);
+    const payload = docNumber ? { DocNumber: docNumber, ...invoicePayload } : invoicePayload;
+    const { data } = await client.post('/invoice?minorversion=65', payload);
     return data.Invoice;
   } catch (err) {
     logQBError('QB invoice creation', err);
