@@ -259,11 +259,49 @@ async function pushToQB(order, items) {
 
 async function deleteOrder(req, res) {
   const { id } = req.params;
-  const lookup = await pool.query('SELECT qb_invoice_id FROM orders WHERE id = $1', [id]);
-  if (!lookup.rows.length) return res.status(404).json({ error: 'Order not found' });
-  const { qb_invoice_id } = lookup.rows[0];
+  const client = await pool.connect();
+  let qb_invoice_id;
 
-  await pool.query('DELETE FROM orders WHERE id = $1', [id]);
+  try {
+    await client.query('BEGIN');
+
+    const lookup = await client.query('SELECT qb_invoice_id FROM orders WHERE id = $1', [id]);
+    if (!lookup.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    qb_invoice_id = lookup.rows[0].qb_invoice_id;
+
+    const items = await client.query(
+      'SELECT product_id, quantity FROM order_items WHERE order_id = $1',
+      [id]
+    );
+
+    for (const item of items.rows) {
+      try {
+        await client.query('SAVEPOINT restore_inventory');
+        const restoreResult = await client.query(
+          'UPDATE products SET quantity_on_hand = quantity_on_hand + $1 WHERE id = $2',
+          [item.quantity, item.product_id]
+        );
+        if (!restoreResult.rowCount) {
+          throw new Error('Product not found');
+        }
+        await client.query('RELEASE SAVEPOINT restore_inventory');
+      } catch (err) {
+        await client.query('ROLLBACK TO SAVEPOINT restore_inventory');
+        console.error(`Failed to restore inventory for order ${id}, product ${item.product_id}:`, err.message);
+      }
+    }
+
+    await client.query('DELETE FROM orders WHERE id = $1', [id]);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 
   if (qb_invoice_id) {
     deleteQBInvoice(qb_invoice_id).catch(err =>
