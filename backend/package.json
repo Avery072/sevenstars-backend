@@ -20,6 +20,7 @@
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.1.1",
     "node-quickbooks": "^2.0.37",
+    "pdfkit": "^0.19.1",
     "pg": "^8.12.0",
     "xlsx": "^0.18.5"
   },

@@ -128,15 +128,12 @@ async function createProduct(req, res) {
   );
 
   const product = result.rows[0];
-  const qbDescriptionSuffix = {
-    ea: ' each',
-    lb: ' by lb',
-    kg: ' by kg',
-  }[unit] || '';
+  const unitLabelMap = { each: 'each', lb: 'per lb', kg: 'per kg' };
+  const unitLabel = unitLabelMap[unit] || unit;
   const fallbackPayload = {
     Name: description,
-    Sku: productSku,
-    Description: `${description}${qbDescriptionSuffix}`,
+    Sku: sku || undefined,
+    Description: `${description} ${unitLabel}`,
     UnitPrice: price || 0,
     PurchaseCost: cost || 0,
   };
