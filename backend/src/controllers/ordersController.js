@@ -83,6 +83,35 @@ async function createOrder(req, res) {
   try {
     await client.query('BEGIN');
 
+    const requestedByProduct = new Map();
+    for (const item of items) {
+      requestedByProduct.set(
+        item.product_id,
+        (requestedByProduct.get(item.product_id) || 0) + Number(item.quantity)
+      );
+    }
+
+    for (const [productId, requestedQuantity] of requestedByProduct.entries()) {
+      const stockResult = await client.query(
+        'SELECT description, quantity_on_hand FROM products WHERE id = $1 FOR UPDATE',
+        [productId]
+      );
+      const product = stockResult.rows[0];
+
+      if (Number(product.quantity_on_hand) < requestedQuantity) {
+        const err = new Error(`Insufficient stock for ${product.description}. Available: ${product.quantity_on_hand}, Requested: ${requestedQuantity}`);
+        err.status = 400;
+        throw err;
+      }
+    }
+
+    for (const [productId, requestedQuantity] of requestedByProduct.entries()) {
+      await client.query(
+        'UPDATE products SET quantity_on_hand = quantity_on_hand - $1 WHERE id = $2',
+        [requestedQuantity, productId]
+      );
+    }
+
     const newItemsTotal = items.reduce((sum, item) => {
       const p = productMap[item.product_id];
       return sum + parseFloat(item.quantity) * parseFloat(p.price || 0);
@@ -129,6 +158,9 @@ async function createOrder(req, res) {
     res.status(201).json(order);
   } catch (err) {
     await client.query('ROLLBACK');
+    if (err.status === 400) {
+      return res.status(400).json({ error: err.message });
+    }
     throw err;
   } finally {
     client.release();
@@ -262,11 +294,49 @@ async function pushToQB(order, items) {
 
 async function deleteOrder(req, res) {
   const { id } = req.params;
-  const lookup = await pool.query('SELECT qb_invoice_id FROM orders WHERE id = $1', [id]);
-  if (!lookup.rows.length) return res.status(404).json({ error: 'Order not found' });
-  const { qb_invoice_id } = lookup.rows[0];
+  const client = await pool.connect();
+  let qb_invoice_id;
 
-  await pool.query('DELETE FROM orders WHERE id = $1', [id]);
+  try {
+    await client.query('BEGIN');
+
+    const lookup = await client.query('SELECT qb_invoice_id FROM orders WHERE id = $1', [id]);
+    if (!lookup.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    qb_invoice_id = lookup.rows[0].qb_invoice_id;
+
+    const items = await client.query(
+      'SELECT product_id, quantity FROM order_items WHERE order_id = $1',
+      [id]
+    );
+
+    for (const item of items.rows) {
+      try {
+        await client.query('SAVEPOINT restore_inventory');
+        const restoreResult = await client.query(
+          'UPDATE products SET quantity_on_hand = quantity_on_hand + $1 WHERE id = $2',
+          [item.quantity, item.product_id]
+        );
+        if (!restoreResult.rowCount) {
+          throw new Error('Product not found');
+        }
+        await client.query('RELEASE SAVEPOINT restore_inventory');
+      } catch (err) {
+        await client.query('ROLLBACK TO SAVEPOINT restore_inventory');
+        console.error(`Failed to restore inventory for order ${id}, product ${item.product_id}:`, err.message);
+      }
+    }
+
+    await client.query('DELETE FROM orders WHERE id = $1', [id]);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 
   if (qb_invoice_id) {
     deleteQBInvoice(qb_invoice_id).catch(err =>
@@ -330,6 +400,72 @@ async function getPackingReport(req, res) {
   res.json(products);
 }
 
+async function getSalmonPullReport(req, res) {
+  const date = req.query.date || null;
+  const result = await pool.query(
+    `SELECT
+       p.id AS product_id,
+       p.sku,
+       p.description,
+       c.company_name,
+       SUM(oi.quantity)::float AS quantity,
+       oi.unit,
+       c.salmon_cut,
+       c.skin_off,
+       c.scale,
+       c.pbo,
+       c.hg,
+       COALESCE(string_agg(DISTINCT NULLIF(oi.notes, ''), '; '), '') AS notes
+     FROM orders o
+     JOIN order_items oi ON oi.order_id = o.id
+     JOIN products p ON p.id = oi.product_id
+     JOIN customers c ON c.id = o.customer_id
+     WHERE o.delivery_date = COALESCE($1::date, CURRENT_DATE)
+       AND p.description ILIKE '%salmon%'
+     GROUP BY p.id, p.sku, p.description, c.company_name, oi.unit,
+              c.salmon_cut, c.skin_off, c.scale, c.pbo, c.hg
+     ORDER BY p.description ASC, c.company_name ASC`,
+    [date]
+  );
+
+  const products = [];
+  const productMap = new Map();
+
+  for (const row of result.rows) {
+    const key = row.product_id;
+    if (!productMap.has(key)) {
+      const product = {
+        product_id: row.product_id,
+        sku: row.sku,
+        description: row.description,
+        unit: row.unit,
+        total_qty: 0,
+        customers: [],
+      };
+      productMap.set(key, product);
+      products.push(product);
+    }
+
+    const product = productMap.get(key);
+    product.total_qty += Number(row.quantity || 0);
+    product.customers.push({
+      sku: row.sku,
+      description: row.description,
+      company_name: row.company_name,
+      quantity: Number(row.quantity || 0),
+      unit: row.unit,
+      salmon_cut: row.salmon_cut,
+      skin_off: row.skin_off,
+      scale: row.scale,
+      pbo: row.pbo,
+      hg: row.hg,
+      notes: row.notes || '',
+    });
+  }
+
+  res.json(products);
+}
+
 // Finds all orders without a qb_invoice_id and retries the QB push.
 async function syncPendingInvoices(req, res) {
   const { rows: orders } = await pool.query(
@@ -383,4 +519,4 @@ async function purgeOldOrders() {
   }
 }
 
-module.exports = { listOrders, getOrder, createOrder, deleteOrder, getPackingReport, syncPendingInvoices, purgeOldOrders, pushToQB };
+module.exports = { listOrders, getOrder, createOrder, deleteOrder, getPackingReport, getSalmonPullReport, syncPendingInvoices, purgeOldOrders, pushToQB };

@@ -47,6 +47,35 @@ router.post('/orders', async (req, res) => {
   try {
     await client.query('BEGIN');
 
+    const requestedByProduct = new Map();
+    for (const item of items) {
+      requestedByProduct.set(
+        item.product_id,
+        (requestedByProduct.get(item.product_id) || 0) + Number(item.quantity)
+      );
+    }
+
+    for (const [productId, requestedQuantity] of requestedByProduct.entries()) {
+      const stockResult = await client.query(
+        'SELECT description, quantity_on_hand FROM products WHERE id = $1 FOR UPDATE',
+        [productId]
+      );
+      const product = stockResult.rows[0];
+
+      if (Number(product.quantity_on_hand) < requestedQuantity) {
+        const err = new Error(`Insufficient stock for ${product.description}. Available: ${product.quantity_on_hand}, Requested: ${requestedQuantity}`);
+        err.status = 400;
+        throw err;
+      }
+    }
+
+    for (const [productId, requestedQuantity] of requestedByProduct.entries()) {
+      await client.query(
+        'UPDATE products SET quantity_on_hand = quantity_on_hand - $1 WHERE id = $2',
+        [requestedQuantity, productId]
+      );
+    }
+
     const newItemsTotal = items.reduce((sum, item) => {
       const p = productMap[item.product_id];
       return sum + parseFloat(item.quantity) * parseFloat(p.price || 0);
@@ -90,6 +119,9 @@ router.post('/orders', async (req, res) => {
     res.status(201).json({ message: 'Order placed successfully', order_id: orderId });
   } catch (err) {
     await client.query('ROLLBACK');
+    if (err.status === 400) {
+      return res.status(400).json({ error: err.message });
+    }
     throw err;
   } finally {
     client.release();

@@ -272,8 +272,8 @@
             <input type="date" class="form-input" id="packing-date" style="width:150px;">
           </div>
           <button class="btn btn-primary" onclick="loadPackingReport()">GENERATE REPORT</button>
+          <button class="btn btn-outline" onclick="downloadSalmonPull()">📥 Salmon Excel</button>
           <button class="btn btn-outline" id="print-packing-btn" onclick="printPackingReport()" style="display:none;">PRINT</button>
-          <button class="btn btn-outline" onclick="downloadDailyPull()" style="font-size:11px;">&#8595; DAILY PULL (.xlsx)</button>
         </div>
         <div id="packing-content">
           <div class="empty-state">Select a date and click Generate Report.</div>
@@ -651,6 +651,7 @@
 
 <input type="file" id="img-file-input" accept="image/*" style="display:none;">
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 let token = localStorage.getItem('ss_token');
 let allProducts = [], allCustomers = [], allOrders = [];
@@ -1227,6 +1228,69 @@ async function loadPackingReport() {
 
 function printPackingReport() {
   window.print();
+}
+
+async function downloadSalmonPull() {
+  const date = document.getElementById('packing-date').value;
+  if (!date) { alert('Select a delivery date first.'); return; }
+  if (!window.XLSX) { alert('Excel library failed to load.'); return; }
+
+  const report = await api(`/api/admin/salmon-pull?date=${encodeURIComponent(date)}`);
+  if (!report || report.error) {
+    alert(report?.error || 'Failed to generate salmon pull report');
+    return;
+  }
+
+  const rows = [['SKU', 'Description', 'Customer', 'Qty', 'Unit', 'Cut', 'Skin Off', 'Scale', 'PBO', 'H&G', 'Notes']];
+
+  for (const product of report) {
+    const productName = `${product.sku || ''} ${product.description || ''}`.trim();
+    rows.push([productName, '', '', '', '', '', '', '', '', '', '']);
+
+    for (const customer of product.customers || []) {
+      rows.push([
+        customer.sku || product.sku || '',
+        customer.description || product.description || '',
+        customer.company_name || '',
+        Number(customer.quantity || 0),
+        customer.unit || product.unit || '',
+        customer.salmon_cut || '',
+        customer.skin_off ? 'Yes' : '',
+        customer.scale ? 'Yes' : '',
+        customer.pbo ? 'Yes' : '',
+        customer.hg ? 'Yes' : '',
+        customer.notes || '',
+      ]);
+    }
+
+    rows.push(['Total', '', '', Number(product.total_qty || 0), product.unit || '', '', '', '', '', '', '']);
+    rows.push([]);
+  }
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [
+    { wch: 16 }, { wch: 32 }, { wch: 28 }, { wch: 10 }, { wch: 8 },
+    { wch: 16 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 8 }, { wch: 28 }
+  ];
+
+  for (let i = 0; i < rows.length; i++) {
+    const firstCell = rows[i][0];
+    const isHeader = i === 0;
+    const isProductHeader = firstCell && rows[i].slice(1).every(value => value === '');
+    const isTotal = firstCell === 'Total';
+
+    if (isHeader || isProductHeader || isTotal) {
+      for (let col = 0; col < 11; col++) {
+        const ref = XLSX.utils.encode_cell({ r: i, c: col });
+        if (!ws[ref]) ws[ref] = { t: 's', v: '' };
+        ws[ref].s = { font: { bold: true } };
+      }
+    }
+  }
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Salmon Pull');
+  XLSX.writeFile(wb, `Salmon_Pull_${date}.xlsx`);
 }
 
 async function downloadDailyPull() {
