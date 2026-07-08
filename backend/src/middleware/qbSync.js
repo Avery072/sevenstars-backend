@@ -76,11 +76,25 @@ async function createQBInvoice(invoicePayload) {
   try {
     const client = await getQBClient();
     const { data } = await client.post('/invoice?minorversion=65', invoicePayload);
-    return data.Invoice;
+    return await ensureDocNumber(client, data.Invoice);
   } catch (err) {
     logQBError('QB invoice creation', err);
     throw err;
   }
+}
+
+// Some QBO company files don't include the auto-assigned DocNumber in the
+// create/update response body — it's assigned but only shows up on a
+// subsequent fetch. Re-fetch once so callers always get the real number.
+async function ensureDocNumber(client, invoice) {
+  if (invoice.DocNumber) return invoice;
+  try {
+    const { data } = await client.get(`/invoice/${invoice.Id}?minorversion=65`);
+    if (data.Invoice?.DocNumber) return data.Invoice;
+  } catch (err) {
+    console.warn(`Could not re-fetch DocNumber for invoice ${invoice.Id}:`, err.message);
+  }
+  return invoice;
 }
 
 async function createQBCustomer(customerPayload) {
@@ -244,7 +258,7 @@ async function appendToQBInvoice(invoiceId, newLines) {
       ...inv,
       Line: [...keepLines, ...newLines],
     });
-    return updated.Invoice;
+    return await ensureDocNumber(client, updated.Invoice);
   } catch (err) {
     logQBError(`QB invoice append ${invoiceId}`, err);
     throw err;
