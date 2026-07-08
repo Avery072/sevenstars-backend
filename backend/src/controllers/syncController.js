@@ -1,7 +1,7 @@
-const pool = require('../config/db');
 const { queryQBAll } = require('../middleware/qbSync');
 const { processInvoice } = require('./webhooksController');
 const { getQBClient } = require('../middleware/qbSync');
+const { upsertQBItem, upsertQBCustomer } = require('../services/qbEntitySync');
 
 async function syncFromQB(req, res) {
   let items, customers;
@@ -17,92 +17,72 @@ async function syncFromQB(req, res) {
     throw err;
   }
 
-  const [itemCount, customerCount] = await Promise.all([
+  const [itemResults, customerResults] = await Promise.all([
     upsertItems(items),
     upsertCustomers(customers),
   ]);
 
+  for (const r of [...itemResults.changed, ...customerResults.changed]) {
+    console.log(`QB sync — ${r.status} "${r.label}":`, r.changes ? r.changes : '(new)');
+  }
+
   res.json({
     message: 'Sync complete',
-    items_synced: itemCount,
-    customers_synced: customerCount,
+    items: {
+      created: itemResults.created,
+      updated: itemResults.updated,
+      unchanged: itemResults.unchanged,
+      changes: itemResults.changed,
+    },
+    customers: {
+      created: customerResults.created,
+      updated: customerResults.updated,
+      unchanged: customerResults.unchanged,
+      changes: customerResults.changed,
+    },
   });
 }
 
 async function upsertItems(items) {
-  let count = 0;
+  let created = 0, updated = 0, unchanged = 0;
+  const changed = [];
+
   for (const item of items) {
     if (item.Type === 'Category' || item.Type === 'Group') continue;
 
-    const vals = [
-      item.Id,
-      item.Name,
-      item.Description || item.Name,
-      item.UnitOfMeasure || 'ea',
-      item.UnitPrice || 0,
-      item.PurchaseCost || 0,
-      item.Active !== false,
-    ];
-
-    // If a locally-created product exists with the same SKU but no QB ID yet,
-    // link it rather than creating a duplicate row.
-    const linked = await pool.query(
-      `UPDATE products
-       SET qb_item_id = $1, description = $3, unit = $4,
-           price = $5, cost = $6, active = $7, updated_at = NOW()
-       WHERE LOWER(sku) = LOWER($2)
-         AND qb_item_id IS NULL
-         AND NOT EXISTS (SELECT 1 FROM products WHERE qb_item_id = $1)
-       RETURNING id`,
-      vals
-    );
-
-    if (!linked.rows.length) {
-      await pool.query(
-        `INSERT INTO products (qb_item_id, sku, description, unit, price, cost, active, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-         ON CONFLICT (qb_item_id) DO UPDATE
-           SET sku         = EXCLUDED.sku,
-               description = EXCLUDED.description,
-               unit        = EXCLUDED.unit,
-               price       = EXCLUDED.price,
-               cost        = EXCLUDED.cost,
-               active      = EXCLUDED.active,
-               updated_at  = NOW()`,
-        vals
-      );
+    const result = await upsertQBItem(item);
+    if (!result) {
+      unchanged++;
+      continue;
     }
-    count++;
+
+    if (result.status === 'created') created++;
+    else updated++;
+
+    changed.push({ status: result.status, label: result.sku || result.description, changes: result.changes });
   }
-  return count;
+
+  return { created, updated, unchanged, changed };
 }
 
 async function upsertCustomers(customers) {
-  let count = 0;
+  let created = 0, updated = 0, unchanged = 0;
+  const changed = [];
+
   for (const c of customers) {
-    await pool.query(
-      `INSERT INTO customers (qb_customer_id, company_name, first_name, last_name, phone, email, active)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT (qb_customer_id) DO UPDATE
-         SET company_name = EXCLUDED.company_name,
-             first_name   = EXCLUDED.first_name,
-             last_name    = EXCLUDED.last_name,
-             phone        = EXCLUDED.phone,
-             email        = EXCLUDED.email,
-             active       = EXCLUDED.active`,
-      [
-        c.Id,
-        c.CompanyName || `${c.GivenName || ''} ${c.FamilyName || ''}`.trim() || c.DisplayName,
-        c.GivenName || null,
-        c.FamilyName || null,
-        c.PrimaryPhone?.FreeFormNumber || null,
-        c.PrimaryEmailAddr?.Address || null,
-        c.Active !== false,
-      ]
-    );
-    count++;
+    const result = await upsertQBCustomer(c);
+    if (!result) {
+      unchanged++;
+      continue;
+    }
+
+    if (result.status === 'created') created++;
+    else updated++;
+
+    changed.push({ status: result.status, label: result.name, changes: result.changes });
   }
-  return count;
+
+  return { created, updated, unchanged, changed };
 }
 
 async function syncInvoicesFromQB(req, res) {

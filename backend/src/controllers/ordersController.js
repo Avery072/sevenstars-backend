@@ -223,15 +223,16 @@ async function pushToQB(order, items) {
     [order.customer_id, order.delivery_date]
   );
 
-  let invoiceId;
+  let invoiceId, docNumber;
   if (existing.rows.length) {
     try {
       const updated = await appendToQBInvoice(existing.rows[0].qb_invoice_id, lines);
       invoiceId = updated.Id;
-      console.log(`QB invoice ${invoiceId} updated — merged order ${order.id} into existing invoice`);
+      docNumber = updated.DocNumber;
+      console.log(`QB invoice #${docNumber} (id ${invoiceId}) updated — merged order ${order.id} into existing invoice`);
     } catch (appendErr) {
       console.warn(`QB invoice ${existing.rows[0].qb_invoice_id} unreachable (deleted/voided in QB), creating new invoice. Error: ${appendErr.message}`);
-      await pool.query('UPDATE orders SET qb_invoice_id = NULL WHERE qb_invoice_id = $1', [existing.rows[0].qb_invoice_id]);
+      await pool.query('UPDATE orders SET qb_invoice_id = NULL, qb_doc_number = NULL WHERE qb_invoice_id = $1', [existing.rows[0].qb_invoice_id]);
       const payload = {
         CustomerRef: { value: qbCustomerId },
         TxnDate: order.delivery_date,
@@ -240,7 +241,8 @@ async function pushToQB(order, items) {
       };
       const invoice = await createQBInvoice(payload);
       invoiceId = invoice.Id;
-      console.log(`QB invoice ${invoiceId} created (fallback) for order ${order.id}`);
+      docNumber = invoice.DocNumber;
+      console.log(`QB invoice #${docNumber} (id ${invoiceId}) created (fallback) for order ${order.id}`);
     }
   } else {
     const payload = {
@@ -251,10 +253,11 @@ async function pushToQB(order, items) {
     };
     const invoice = await createQBInvoice(payload);
     invoiceId = invoice.Id;
-    console.log(`QB invoice ${invoiceId} created for order ${order.id}`);
+    docNumber = invoice.DocNumber;
+    console.log(`QB invoice #${docNumber} (id ${invoiceId}) created for order ${order.id}`);
   }
 
-  await pool.query('UPDATE orders SET qb_invoice_id = $1 WHERE id = $2', [invoiceId, order.id]);
+  await pool.query('UPDATE orders SET qb_invoice_id = $1, qb_doc_number = $2 WHERE id = $3', [invoiceId, docNumber, order.id]);
 }
 
 async function deleteOrder(req, res) {
@@ -380,4 +383,4 @@ async function purgeOldOrders() {
   }
 }
 
-module.exports = { listOrders, getOrder, createOrder, deleteOrder, getPackingReport, syncPendingInvoices, purgeOldOrders };
+module.exports = { listOrders, getOrder, createOrder, deleteOrder, getPackingReport, syncPendingInvoices, purgeOldOrders, pushToQB };

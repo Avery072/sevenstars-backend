@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { requireCustomerAuth } = require('../middleware/auth');
 const pool = require('../config/db');
-const { createQBInvoice, appendToQBInvoice, createQBCustomer, getQBClient } = require('../middleware/qbSync');
+const { pushToQB } = require('../controllers/ordersController');
 
 router.use(requireCustomerAuth);
 
@@ -82,9 +82,10 @@ router.post('/orders', async (req, res) => {
 
     await client.query('COMMIT');
 
-    pushToQB({ id: orderId, customer_id, delivery_date, notes: notes || null }, items, productMap).catch(err =>
-      console.error('QB invoice push failed for mobile order:', err.message)
-    );
+    pushToQB({ id: orderId, customer_id, delivery_date, notes: notes || null }, items).catch(err => {
+      const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+      console.error(`QB invoice push failed for mobile order ${orderId}:`, detail);
+    });
 
     res.status(201).json({ message: 'Order placed successfully', order_id: orderId });
   } catch (err) {
@@ -94,115 +95,6 @@ router.post('/orders', async (req, res) => {
     client.release();
   }
 });
-
-async function pushToQB(order, items, productMap) {
-  const custResult = await pool.query(
-    `SELECT c.qb_customer_id, c.company_name, c.first_name, c.last_name, c.phone,
-            COALESCE(c.email, mu.email) AS email
-     FROM customers c
-     LEFT JOIN mobile_users mu ON mu.customer_id = c.id
-     WHERE c.id = $1
-     LIMIT 1`,
-    [order.customer_id]
-  );
-  const customer = custResult.rows[0];
-  let qbCustomerId = customer?.qb_customer_id;
-
-  if (!qbCustomerId) {
-    const displayName = customer.company_name ||
-      [customer.first_name, customer.last_name].filter(Boolean).join(' ') ||
-      `Customer ${order.customer_id}`;
-
-    try {
-      const qbClient = await getQBClient();
-      const q = `SELECT * FROM Customer WHERE DisplayName = '${displayName.replace(/'/g, "''")}'`;
-      const { data } = await qbClient.get(`/query?query=${encodeURIComponent(q)}&minorversion=65`);
-      const existing = data?.QueryResponse?.Customer?.[0];
-      if (existing) {
-        qbCustomerId = existing.Id;
-        console.log(`Found existing QB customer ${qbCustomerId} for "${displayName}"`);
-      }
-    } catch (e) {
-      console.warn('QB customer lookup failed, will attempt create:', e.message);
-    }
-
-    if (!qbCustomerId) {
-      const qbCustomer = await createQBCustomer({
-        DisplayName: displayName,
-        CompanyName: customer.company_name || null,
-        GivenName: customer.first_name || null,
-        FamilyName: customer.last_name || null,
-        PrimaryEmailAddr: customer.email ? { Address: customer.email } : undefined,
-        PrimaryPhone: customer.phone ? { FreeFormNumber: customer.phone } : undefined,
-      });
-      qbCustomerId = qbCustomer.Id;
-      console.log(`Created QB customer ${qbCustomerId} for local customer ${order.customer_id}`);
-    }
-
-    await pool.query(
-      'UPDATE customers SET qb_customer_id = $1 WHERE id = $2',
-      [qbCustomerId, order.customer_id]
-    );
-  }
-
-  const lines = items
-    .filter(item => productMap[item.product_id]?.qb_item_id)
-    .map(item => {
-      const p = productMap[item.product_id];
-      return {
-        Amount: parseFloat(item.quantity) * parseFloat(p.price || 0),
-        DetailType: 'SalesItemLineDetail',
-        SalesItemLineDetail: {
-          ItemRef: { value: p.qb_item_id },
-          Qty: parseFloat(item.quantity),
-          UnitPrice: parseFloat(p.price || 0),
-        },
-      };
-    });
-
-  if (!lines.length) throw new Error('No QB-linked items — skipping invoice');
-
-  // Merge into existing invoice if one already exists for this customer + delivery date
-  const existing = await pool.query(
-    `SELECT qb_invoice_id FROM orders
-     WHERE customer_id = $1 AND delivery_date = $2 AND qb_invoice_id IS NOT NULL
-     ORDER BY id ASC LIMIT 1`,
-    [order.customer_id, order.delivery_date]
-  );
-
-  let invoiceId;
-  if (existing.rows.length) {
-    try {
-      const updated = await appendToQBInvoice(existing.rows[0].qb_invoice_id, lines);
-      invoiceId = updated.Id;
-      console.log(`QB invoice ${invoiceId} updated — merged mobile order ${order.id} into existing invoice`);
-    } catch (appendErr) {
-      console.warn(`QB invoice ${existing.rows[0].qb_invoice_id} unreachable (deleted/voided in QB), creating new invoice. Error: ${appendErr.message}`);
-      await pool.query('UPDATE orders SET qb_invoice_id = NULL WHERE qb_invoice_id = $1', [existing.rows[0].qb_invoice_id]);
-      const payload = {
-        CustomerRef: { value: qbCustomerId },
-        TxnDate: order.delivery_date,
-        Line: lines,
-        ...(order.notes ? { CustomerMemo: { value: order.notes } } : {}),
-      };
-      const invoice = await createQBInvoice(payload);
-      invoiceId = invoice.Id;
-      console.log(`QB invoice ${invoiceId} created (fallback) for mobile order ${order.id}`);
-    }
-  } else {
-    const payload = {
-      CustomerRef: { value: qbCustomerId },
-      TxnDate: order.delivery_date,
-      Line: lines,
-      ...(order.notes ? { CustomerMemo: { value: order.notes } } : {}),
-    };
-    const invoice = await createQBInvoice(payload);
-    invoiceId = invoice.Id;
-    console.log(`QB invoice ${invoiceId} created for mobile order ${order.id}`);
-  }
-
-  await pool.query('UPDATE orders SET qb_invoice_id = $1 WHERE id = $2', [invoiceId, order.id]);
-}
 
 // PATCH /api/mobile/salmon-prefs — one-time set at signup; rejected if already saved
 router.patch('/salmon-prefs', async (req, res) => {

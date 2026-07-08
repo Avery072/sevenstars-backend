@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const pool = require('../config/db');
 const { fetchQBItem, fetchQBCustomer, fetchQBInvoice } = require('../middleware/qbSync');
+const { upsertQBItem } = require('../services/qbEntitySync');
 
 // QB sends a signature in the intuit-signature header; verify before processing.
 function verifySignature(req) {
@@ -55,25 +56,12 @@ async function syncItem(qbItemId, operation) {
   }
 
   const item = await fetchQBItem(qbItemId);
-  await pool.query(
-    `INSERT INTO products (qb_item_id, sku, description, price, cost, active, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, NOW())
-     ON CONFLICT (qb_item_id) DO UPDATE
-       SET sku = EXCLUDED.sku,
-           description = EXCLUDED.description,
-           price = EXCLUDED.price,
-           cost = EXCLUDED.cost,
-           active = EXCLUDED.active,
-           updated_at = NOW()`,
-    [
-      item.Id,
-      item.Name,
-      item.Description || item.Name,
-      item.UnitPrice || 0,
-      item.PurchaseCost || 0,
-      item.Active !== false,
-    ]
-  );
+  if (item.Type === 'Category' || item.Type === 'Group') return;
+
+  const result = await upsertQBItem(item);
+  if (result) {
+    console.log(`QB webhook — item ${result.status} "${result.sku || result.description}"`, result.changes || '(new)');
+  }
 }
 
 // processInvoice handles a full QB Invoice object — used by both the webhook and the bulk sync.
@@ -138,9 +126,9 @@ async function processInvoice(invoice) {
     await client.query('BEGIN');
 
     const orderResult = await client.query(
-      `INSERT INTO orders (qb_invoice_id, customer_id, delivery_date, notes, total)
-       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-      [qbInvoiceId, customerId, deliveryDate, notes, total]
+      `INSERT INTO orders (qb_invoice_id, qb_doc_number, customer_id, delivery_date, notes, total)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      [qbInvoiceId, invoice.DocNumber || null, customerId, deliveryDate, notes, total]
     );
     const orderId = orderResult.rows[0].id;
 

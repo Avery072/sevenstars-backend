@@ -68,26 +68,14 @@ async function fetchQBInvoice(invoiceId) {
   }
 }
 
-async function getNextDocNumber(client) {
-  try {
-    // QB IQL uses ORDERBY (no space); sort by Id DESC (auto-increment) to get latest
-    const query = `SELECT DocNumber FROM Invoice ORDERBY Id DESC MAXRESULTS 1`;
-    const { data } = await client.get(`/query?query=${encodeURIComponent(query)}&minorversion=65`);
-    const last = data?.QueryResponse?.Invoice?.[0]?.DocNumber;
-    if (last && /^\d+$/.test(last)) return String(parseInt(last, 10) + 1);
-    console.warn('getNextDocNumber: last DocNumber was', last, '— not purely numeric, skipping');
-  } catch (err) {
-    console.warn('getNextDocNumber failed:', err.message);
-  }
-  return undefined;
-}
-
+// DocNumber is intentionally left unset — QBO assigns it atomically on its
+// side. Computing "last + 1" ourselves was racy (two invoices created close
+// together could compute the same next number) and got silently overridden
+// anyway on any company file without "Custom Transaction Numbers" enabled.
 async function createQBInvoice(invoicePayload) {
   try {
     const client = await getQBClient();
-    const docNumber = await getNextDocNumber(client);
-    const payload = docNumber ? { DocNumber: docNumber, ...invoicePayload } : invoicePayload;
-    const { data } = await client.post('/invoice?minorversion=65', payload);
+    const { data } = await client.post('/invoice?minorversion=65', invoicePayload);
     return data.Invoice;
   } catch (err) {
     logQBError('QB invoice creation', err);
