@@ -1,0 +1,11 @@
+-- This QBO company has "Custom transaction numbers" enabled, so QBO does not
+-- auto-assign an invoice DocNumber when we omit one — it's left blank. We
+-- need to supply one ourselves. A Postgres sequence gives atomic, gap-tolerant
+-- numbering under concurrent order creation (unlike reading QBO's last
+-- DocNumber and computing +1 client-side, which races).
+--
+-- Seeded to 34790 — the highest confirmed real DocNumber in QBO as of
+-- 2026-07-08 was 34789 (invoice 56764).  If more invoices were created
+-- between that check and this migration running, bump the start value
+-- accordingly before applying, or ALTER SEQUENCE afterward.
+CREATE SEQUENCE IF NOT EXISTS qb_invoice_doc_number_seq START WITH 34790;

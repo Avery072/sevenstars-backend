@@ -68,33 +68,29 @@ async function fetchQBInvoice(invoiceId) {
   }
 }
 
-// DocNumber is intentionally left unset — QBO assigns it atomically on its
-// side. Computing "last + 1" ourselves was racy (two invoices created close
-// together could compute the same next number) and got silently overridden
-// anyway on any company file without "Custom Transaction Numbers" enabled.
+// This company has "Custom transaction numbers" enabled in QBO, so DocNumber
+// must be supplied by the caller — QBO leaves it blank rather than
+// auto-assigning one (see checkDocNumberPreference / migration 010). Callers
+// draw the next value from qb_invoice_doc_number_seq (atomic, unlike reading
+// QBO's last DocNumber and computing +1 client-side, which races).
 async function createQBInvoice(invoicePayload) {
   try {
     const client = await getQBClient();
     const { data } = await client.post('/invoice?minorversion=65', invoicePayload);
-    return await ensureDocNumber(client, data.Invoice);
+    return data.Invoice;
   } catch (err) {
     logQBError('QB invoice creation', err);
     throw err;
   }
 }
 
-// Some QBO company files don't include the auto-assigned DocNumber in the
-// create/update response body — it's assigned but only shows up on a
-// subsequent fetch. Re-fetch once so callers always get the real number.
-async function ensureDocNumber(client, invoice) {
-  if (invoice.DocNumber) return invoice;
-  try {
-    const { data } = await client.get(`/invoice/${invoice.Id}?minorversion=65`);
-    if (data.Invoice?.DocNumber) return data.Invoice;
-  } catch (err) {
-    console.warn(`Could not re-fetch DocNumber for invoice ${invoice.Id}:`, err.message);
-  }
-  return invoice;
+// QBO error code 6140 = "Duplicate Document Number Error" — thrown when the
+// DocNumber we supplied collides with one already used (e.g. a staff member
+// created an invoice directly in QBO with the same number around the same
+// time). Callers can catch this to retry with a fresh number.
+function isDuplicateDocNumberError(err) {
+  const errors = err.response?.data?.Fault?.Error;
+  return Array.isArray(errors) && errors.some(e => e.code === '6140');
 }
 
 async function createQBCustomer(customerPayload) {
@@ -258,7 +254,7 @@ async function appendToQBInvoice(invoiceId, newLines) {
       ...inv,
       Line: [...keepLines, ...newLines],
     });
-    return await ensureDocNumber(client, updated.Invoice);
+    return updated.Invoice;
   } catch (err) {
     logQBError(`QB invoice append ${invoiceId}`, err);
     throw err;
@@ -309,6 +305,7 @@ module.exports = {
   createQBInvoice,
   appendToQBInvoice,
   deleteQBInvoice,
+  isDuplicateDocNumberError,
   createQBCustomer,
   createQBItem,
   getOrCreateQBItemCategory,

@@ -1,5 +1,28 @@
 const pool = require('../config/db');
-const { createQBInvoice, appendToQBInvoice, createQBCustomer, getQBClient, deleteQBInvoice } = require('../middleware/qbSync');
+const { createQBInvoice, appendToQBInvoice, createQBCustomer, getQBClient, deleteQBInvoice, isDuplicateDocNumberError } = require('../middleware/qbSync');
+
+async function nextQBDocNumber() {
+  const { rows } = await pool.query("SELECT nextval('qb_invoice_doc_number_seq')::text AS n");
+  return rows[0].n;
+}
+
+// Creates the invoice with a fresh DocNumber, retrying with a new one if QBO
+// rejects it as a duplicate (e.g. a staff member created an invoice directly
+// in QBO with the same number around the same time).
+async function createQBInvoiceWithDocNumber(payload, attempts = 3) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const docNumber = await nextQBDocNumber();
+    try {
+      return await createQBInvoice({ ...payload, DocNumber: docNumber });
+    } catch (err) {
+      if (attempt < attempts && isDuplicateDocNumberError(err)) {
+        console.warn(`DocNumber ${docNumber} was already taken in QBO, retrying with a new one (attempt ${attempt}/${attempts})`);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
 
 async function listOrders(req, res) {
   const { date, customer_id } = req.query;
@@ -271,7 +294,7 @@ async function pushToQB(order, items) {
         Line: lines,
         ...(order.notes ? { CustomerMemo: { value: order.notes } } : {}),
       };
-      const invoice = await createQBInvoice(payload);
+      const invoice = await createQBInvoiceWithDocNumber(payload);
       invoiceId = invoice.Id;
       docNumber = invoice.DocNumber;
       console.log(`QB invoice #${docNumber} (id ${invoiceId}) created (fallback) for order ${order.id}`);
@@ -283,7 +306,7 @@ async function pushToQB(order, items) {
       Line: lines,
       ...(order.notes ? { CustomerMemo: { value: order.notes } } : {}),
     };
-    const invoice = await createQBInvoice(payload);
+    const invoice = await createQBInvoiceWithDocNumber(payload);
     invoiceId = invoice.Id;
     docNumber = invoice.DocNumber;
     console.log(`QB invoice #${docNumber} (id ${invoiceId}) created for order ${order.id}`);
