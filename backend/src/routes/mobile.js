@@ -147,7 +147,31 @@ router.patch('/salmon-prefs', async (req, res) => {
      WHERE id = $6 RETURNING salmon_cut, skin_off, scale, pbo, hg`,
     [salmon_cut || null, skin_off ?? false, scale ?? false, pbo ?? false, hg ?? false, customer_id]
   );
+
+  // Submitting cut prefs completes the quiz for this user.
+  await pool.query('UPDATE mobile_users SET quiz_completed = TRUE WHERE id = $1', [req.user.user_id]);
+
   res.json(result.rows[0]);
+});
+
+// GET /api/mobile/quiz-status — should the app show the salmon-cut quiz?
+// Completed if this user finished it OR the company already has a preference set.
+router.get('/quiz-status', async (req, res) => {
+  const result = await pool.query(
+    `SELECT (mu.quiz_completed OR c.salmon_cut IS NOT NULL) AS quiz_completed
+     FROM mobile_users mu
+     JOIN customers c ON c.id = mu.customer_id
+     WHERE mu.id = $1`,
+    [req.user.user_id]
+  );
+  res.json({ quiz_completed: result.rows[0]?.quiz_completed ?? false });
+});
+
+// POST /api/mobile/quiz-complete — mark the quiz done without changing company prefs
+// (e.g. a main user of an already-configured company acknowledging/skipping the quiz).
+router.post('/quiz-complete', async (req, res) => {
+  await pool.query('UPDATE mobile_users SET quiz_completed = TRUE WHERE id = $1', [req.user.user_id]);
+  res.json({ quiz_completed: true });
 });
 
 // ── Sub-user management (main user only) ──────────────────────────────────────
