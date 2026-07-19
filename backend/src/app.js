@@ -51,11 +51,15 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`Seven Stars backend running on port ${PORT}`);
-  purgeOldOrders();
-  setInterval(purgeOldOrders, 24 * 60 * 60 * 1000);
-});
+// Only listen (and run the purge job) when this file is the actual entry
+// point — requiring it from tests should just build the app, no side effects.
+if (require.main === module) {
+  const PORT = process.env.PORT || 3001;
+  app.listen(PORT, () => {
+    console.log(`Seven Stars backend running on port ${PORT}`);
+    purgeOldOrders();
+    setInterval(purgeOldOrders, 24 * 60 * 60 * 1000);
+  });
+}
 
 module.exports = app;
