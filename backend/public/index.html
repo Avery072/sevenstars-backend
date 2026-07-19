@@ -206,7 +206,7 @@
     </div>
     <div class="sidebar-section">Operations</div>
     <div class="nav-item active" onclick="showPanel('orders',this)">&#9632; Orders</div>
-    <div class="nav-item" onclick="showPanel('packing',this)">&#9632; Packing Report</div>
+    <div class="nav-item" onclick="showPanel('packing',this)">&#9632; Reports</div>
     <div class="sidebar-section">Catalog</div>
     <div class="nav-item" onclick="showPanel('products',this)">&#9632; Products</div>
     <div class="nav-item" onclick="showPanel('salmon',this)">&#9632; Salmon Cuts</div>
@@ -1172,7 +1172,7 @@ async function loadPackingReport() {
 
   const report = await api(`/api/admin/packing-report?date=${encodeURIComponent(date)}`);
   if (!report || report.error) {
-    content.innerHTML = `<div class="empty-state">Failed to load packing report.</div>`;
+    content.innerHTML = `<div class="empty-state">Failed to load reports.</div>`;
     return;
   }
 
@@ -1215,7 +1215,7 @@ async function loadPackingReport() {
     <div id="packing-report-area">
       <div class="table-card">
         <div class="table-header">
-          <div class="table-title">Seven Star Foods — Packing Report — ${esc(date)}</div>
+          <div class="table-title">Seven Star Foods — Reports — ${esc(date)}</div>
         </div>
         <table>
           <thead><tr><th>Customer</th><th>Product</th><th>Quantity</th><th>Unit</th></tr></thead>
@@ -1601,7 +1601,7 @@ document.getElementById('np-unit').addEventListener('change', updateProductQtySt
 updateProductQtyStep();
 
 /* ── Navigation ── */
-const panelTitles = { orders:'Orders', packing:'Packing Report', products:'Products', salmon:'Salmon Cuts', inventory:'Inventory', customers:'Customers', accounts:'User Accounts', pending:'Pending Approvals' };
+const panelTitles = { orders:'Orders', packing:'Reports', products:'Products', salmon:'Salmon Cuts', inventory:'Inventory', customers:'Customers', accounts:'User Accounts', pending:'Pending Approvals' };
 const panelBtns   = { orders:'+ NEW ORDER', packing:'GENERATE REPORT', products:'+ ADD PRODUCT', salmon:'', inventory:'', customers:'+ NEW CUSTOMER', accounts:'', pending:'' };
 
 function showPanel(name, el) {
@@ -1625,7 +1625,7 @@ function handleTopbarBtn() {
     openModal('modal-product');
     document.getElementById('np-inv-date').value = new Date().toISOString().split('T')[0];
   }
-  else if (title === 'Packing Report') loadPackingReport();
+  else if (title === 'Reports') loadPackingReport();
 }
 
 function openModal(id) { document.getElementById(id).classList.add('open'); }

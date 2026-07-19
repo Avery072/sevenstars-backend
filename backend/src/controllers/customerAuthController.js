@@ -10,7 +10,7 @@ async function customerLogin(req, res) {
   }
 
   const result = await pool.query(
-    `SELECT mu.*, c.company_name, c.active AS company_active
+    `SELECT mu.*, c.company_name, c.active AS company_active, c.salmon_cut
      FROM mobile_users mu
      JOIN customers c ON c.id = mu.customer_id
      WHERE mu.email = $1`,
@@ -33,7 +33,11 @@ async function customerLogin(req, res) {
     { expiresIn: '8h' }
   );
 
-  res.json({ token, company_name: user.company_name, name: user.name, customer_id: user.customer_id, is_main: user.is_main });
+  // Show the quiz only if this user hasn't completed it AND the company has no
+  // salmon preference yet. A pre-configured/migrated company counts as done.
+  const quiz_completed = user.quiz_completed || user.salmon_cut !== null;
+
+  res.json({ token, company_name: user.company_name, name: user.name, customer_id: user.customer_id, is_main: user.is_main, quiz_completed });
 }
 
 // GET /api/auth/check-company?name=X
