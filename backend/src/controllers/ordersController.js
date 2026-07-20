@@ -25,12 +25,17 @@ async function createQBInvoiceWithDocNumber(payload, attempts = 3) {
 }
 
 async function listOrders(req, res) {
-  const { date, customer_id } = req.query;
+  const { date, from, to, customer_id } = req.query;
 
   const conditions = [];
   const params = [];
 
-  if (date) {
+  if (from && to) {
+    // Caller (admin portal date-range filter) computes from/to in local time
+    // and passes plain YYYY-MM-DD strings — no timezone conversion happens here.
+    params.push(from, to);
+    conditions.push(`o.delivery_date BETWEEN $${params.length - 1} AND $${params.length}`);
+  } else if (date) {
     params.push(date);
     conditions.push(`o.delivery_date = $${params.length}`);
   } else {
@@ -532,13 +537,15 @@ async function syncPendingInvoices(req, res) {
   res.json({ message: 'Sync complete', synced, failed });
 }
 
-// Deletes orders (and their line items via CASCADE) older than 3 days.
+// Deletes orders (and their line items via CASCADE) older than ~1 month.
+// Kept at 31 days (not 30) so the admin's "past month" filter (rolling 30
+// days) never loses data right at its own edge.
 async function purgeOldOrders() {
   const result = await pool.query(
-    `DELETE FROM orders WHERE delivery_date < CURRENT_DATE - INTERVAL '2 days'`
+    `DELETE FROM orders WHERE delivery_date < CURRENT_DATE - INTERVAL '31 days'`
   );
   if (result.rowCount > 0) {
-    console.log(`Purged ${result.rowCount} order(s) older than 3 days`);
+    console.log(`Purged ${result.rowCount} order(s) older than 31 days`);
   }
 }
 

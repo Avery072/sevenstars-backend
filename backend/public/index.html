@@ -110,14 +110,16 @@
   .badge-gray { background: var(--gray-mid); color: var(--gray-dark); }
 
   /* ── Order cards ── */
-  .order-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; margin-bottom: 16px; border: 1px solid var(--border); border-right: none; border-bottom: none; }
-  .order-card { background: white; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 12px; cursor: pointer; }
-  .order-card:hover { background: #FFF5F5; }
-  .order-card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; }
-  .order-customer { font-size: 12px; font-weight: bold; color: var(--black); }
-  .order-time { font-size: 10px; color: var(--gray-dark); margin-top: 1px; }
-  .order-footer { display: flex; align-items: center; justify-content: space-between; padding-top: 8px; border-top: 1px solid var(--gray-mid); }
-  .order-total { font-size: 13px; font-weight: bold; color: var(--black); }
+  .order-filter-bar { display: flex; gap: 10px; margin-bottom: 12px; }
+  .order-list { border: 1px solid var(--border); border-bottom: none; margin-bottom: 16px; background: white; }
+  .order-row { border-bottom: 1px solid var(--border); }
+  .order-row-summary { display: flex; align-items: center; gap: 16px; padding: 10px 12px; cursor: pointer; }
+  .order-row-summary:hover { background: #FFF5F5; }
+  .order-row-caret { color: var(--gray-dark); width: 10px; font-size: 10px; flex-shrink: 0; }
+  .order-customer { font-size: 12px; font-weight: bold; color: var(--black); min-width: 170px; }
+  .order-time { font-size: 11px; color: var(--gray-dark); min-width: 140px; }
+  .order-total { font-size: 13px; font-weight: bold; color: var(--black); margin-left: auto; }
+  .order-row-detail { padding: 14px 16px; border-top: 1px dashed var(--gray-mid); background: var(--gray-light); }
   .empty-state { padding: 32px; text-align: center; color: var(--gray-dark); font-size: 12px; font-style: italic; }
 
   /* ── Modal ── */
@@ -259,8 +261,9 @@
             <div class="stat-change">Total accounts</div>
           </div>
         </div>
-        <div class="order-grid" id="order-grid">
-          <div class="empty-state" style="grid-column:1/-1;border:1px solid var(--border);">Loading orders...</div>
+        <div class="order-filter-bar" id="order-filter-bar"></div>
+        <div class="order-list" id="order-grid">
+          <div class="empty-state" style="border:1px solid var(--border);">Loading orders...</div>
         </div>
       </div>
 
@@ -497,18 +500,6 @@
   </div>
 </div>
 
-<!-- MODAL: Order Detail -->
-<div class="modal-overlay" id="modal-order-detail">
-  <div class="modal">
-    <div class="modal-head">
-      <div class="modal-title" id="detail-title">Order Detail</div>
-      <button class="modal-close" onclick="closeModal('modal-order-detail')">X</button>
-    </div>
-    <div class="modal-body" id="detail-body">Loading...</div>
-    <div class="modal-footer" id="detail-footer"></div>
-  </div>
-</div>
-
 <!-- MODAL: QB Pull Range -->
 <div class="modal-overlay" id="modal-qb-range">
   <div class="modal" style="max-width:320px;">
@@ -654,11 +645,32 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 let token = localStorage.getItem('ss_token');
-let allProducts = [], allCustomers = [], allOrders = [];
+let allProducts = [], allCustomers = [], allOrders = [], filteredOrders = [];
 let productDeleteMode = false;
 let selectedProductIds = new Set();
 let productSearchQuery = '';
 let productSubmitting = false;
+let orderFilterRange = '3days'; // 'today' | '3days' | 'week' | 'month'
+let orderFilterDirection = 'past'; // 'past' | 'future' (ignored for 'today')
+let expandedOrderId = null;
+let expandedOrderCache = {}; // order id -> full detail (with line items), fetched once per expand
+
+// Local calendar-day string (YYYY-MM-DD) — NEVER use Date#toISOString() for this.
+// toISOString() converts to UTC first, so anything computed late at night in a
+// timezone behind UTC (all US zones) silently rolls forward to tomorrow's date.
+// This bit an actual order once: placed at 11pm with "today" selected as the
+// delivery date, it was stored as tomorrow.
+function toLocalDateStr(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+function addDays(date, n) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + n);
+  return d;
+}
 
 /* ── Auth ── */
 async function doLogin() {
@@ -700,7 +712,7 @@ function startApp() {
   document.getElementById('app').style.display = 'flex';
   document.getElementById('sidebar-user').textContent = localStorage.getItem('ss_user') || 'admin';
   document.getElementById('topbar-date').textContent = new Date().toLocaleDateString('en-US', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
-  document.getElementById('packing-date').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('packing-date').value = toLocalDateStr(new Date());
   loadAll();
 }
 
@@ -773,7 +785,9 @@ async function loadAll() {
   allProducts = products || [];
   allCustomers = customers || [];
   allOrders = orders || [];
+  filteredOrders = allOrders; // default filter (3 Days / Past) matches the unfiltered fetch above
 
+  renderOrderFilterBar();
   renderOrders();
   renderProducts();
   renderCustomers();
@@ -795,17 +809,13 @@ async function doSyncInvoices(days) {
   const btn = document.getElementById('sync-invoices-btn');
   btn.textContent = '⏳ Pulling...';
   btn.disabled = true;
-  const since = new Date();
-  since.setDate(since.getDate() - (days - 1));
-  const date = since.toISOString().slice(0, 10);
+  const date = toLocalDateStr(addDays(new Date(), -(days - 1)));
   const res = await api(`/api/admin/sync-invoices-from-qb?date=${date}`, { method: 'POST' });
   btn.disabled = false;
   btn.textContent = '↓ PULL INVOICES FROM QB';
   if (res) {
     alert(`Invoice sync complete — ${res.created} new orders created, ${res.updated} updated, ${res.skipped} skipped.`);
-    allOrders = await api('/api/orders') || allOrders;
-    renderOrders();
-    checkPendingInvoices();
+    await refreshOrdersAfterMutation();
   }
 }
 
@@ -817,9 +827,7 @@ async function syncPendingInvoices() {
   btn.disabled = false;
   if (res) {
     alert(`Sync complete — ${res.synced} pushed to QB, ${res.failed} failed.`);
-    allOrders = await api('/api/orders') || allOrders;
-    renderOrders();
-    checkPendingInvoices();
+    await refreshOrdersAfterMutation();
   }
 }
 
@@ -830,9 +838,9 @@ function checkPendingInvoices() {
   btn.textContent = `↻ SYNC PENDING TO QB (${pending})`;
 }
 
-/* ── Stats ── */
+/* ── Stats (always reflect the fixed 3-day baseline, independent of the order-list filter below) ── */
 function updateStats() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = toLocalDateStr(new Date());
   const todayOrders = allOrders.filter(o => o.delivery_date && o.delivery_date.slice(0, 10) === today);
   const revenue = allOrders.reduce((s, o) => s + parseFloat(o.total || 0), 0);
   document.getElementById('stat-today').textContent = todayOrders.length;
@@ -841,14 +849,64 @@ function updateStats() {
   document.getElementById('stat-customers').textContent = allCustomers.length;
 }
 
-/* ── Orders ── */
+/* ── Orders: date-range filter + expandable list ── */
+const ORDER_RANGE_DAYS = { today: 1, '3days': 3, week: 7, month: 30 };
+const ORDER_RANGE_LABELS = { today: 'Today', '3days': '3 Days', week: 'Week', month: 'Month' };
+
+function computeOrderDateRange(range, direction) {
+  const today = new Date();
+  if (range === 'today') {
+    const t = toLocalDateStr(today);
+    return { from: t, to: t };
+  }
+  const span = ORDER_RANGE_DAYS[range] || 3;
+  return direction === 'future'
+    ? { from: toLocalDateStr(today), to: toLocalDateStr(addDays(today, span - 1)) }
+    : { from: toLocalDateStr(addDays(today, -(span - 1))), to: toLocalDateStr(today) };
+}
+
+async function applyOrderFilter(range, direction) {
+  orderFilterRange = range;
+  orderFilterDirection = direction;
+  expandedOrderId = null;
+  renderOrderFilterBar();
+  document.getElementById('order-grid').innerHTML = '<div class="empty-state" style="border:1px solid var(--border);">Loading orders...</div>';
+  const { from, to } = computeOrderDateRange(range, direction);
+  filteredOrders = await api(`/api/orders?from=${from}&to=${to}`) || [];
+  renderOrders();
+}
+
+function renderOrderFilterBar() {
+  const rangeChips = Object.keys(ORDER_RANGE_LABELS).map(key =>
+    `<div class="filter-chip ${orderFilterRange === key ? 'active' : ''}" onclick="applyOrderFilter('${key}', orderFilterDirection)">${ORDER_RANGE_LABELS[key]}</div>`
+  ).join('');
+  const dirChips = orderFilterRange === 'today' ? '' : `
+    <div class="filter-row">
+      <div class="filter-chip ${orderFilterDirection === 'past' ? 'active' : ''}" onclick="applyOrderFilter(orderFilterRange, 'past')">Past</div>
+      <div class="filter-chip ${orderFilterDirection === 'future' ? 'active' : ''}" onclick="applyOrderFilter(orderFilterRange, 'future')">Future</div>
+    </div>`;
+  document.getElementById('order-filter-bar').innerHTML = `<div class="filter-row">${rangeChips}</div>${dirChips}`;
+}
+
+// Refetches both the stats baseline (fixed 3-day window) and whatever range
+// is currently selected in the list below — called after anything that adds,
+// removes, or re-syncs orders.
+async function refreshOrdersAfterMutation() {
+  allOrders = await api('/api/orders') || allOrders;
+  const { from, to } = computeOrderDateRange(orderFilterRange, orderFilterDirection);
+  filteredOrders = await api(`/api/orders?from=${from}&to=${to}`) || filteredOrders;
+  updateStats();
+  checkPendingInvoices();
+  renderOrders();
+}
+
 function renderOrders() {
-  const grid = document.getElementById('order-grid');
-  if (!allOrders.length) {
-    grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;border:1px solid var(--border);">No orders in the last 3 days.</div>';
+  const container = document.getElementById('order-grid');
+  if (!filteredOrders.length) {
+    container.innerHTML = '<div class="empty-state" style="border:1px solid var(--border);">No orders in this range.</div>';
     return;
   }
-  grid.innerHTML = allOrders.map(o => {
+  container.innerHTML = filteredOrders.map(o => {
     const customer = o.company_name || [o.first_name, o.last_name].filter(Boolean).join(' ') || 'Unknown';
     const placedAt = o.order_placed_at ? new Date(o.order_placed_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }) : '—';
     const delivDate = o.delivery_date ? o.delivery_date.slice(0, 10) : '—';
@@ -859,37 +917,51 @@ function renderOrders() {
     const totalDisplay = isModified && origTotal && origTotal !== total
       ? `<span style="text-decoration:line-through;color:var(--gray-dark);font-size:11px;">${origTotal}</span> ${total}`
       : total;
-    const cardStyle = isVoided ? 'opacity:0.5;background:#f5f5f5;' : isModified ? 'background:#fffbe6;border-color:#d4a800;' : '';
+    const rowStyle = isVoided ? 'opacity:0.5;background:#f5f5f5;' : isModified ? 'background:#fffbe6;' : '';
     const statusBadge = isVoided
       ? '<span class="badge badge-gray" style="margin-left:6px;">VOIDED</span>'
       : isModified ? '<span class="badge badge-amber" style="margin-left:6px;">MODIFIED</span>' : '';
+    const isExpanded = expandedOrderId === o.id;
     return `
-      <div class="order-card" onclick="viewOrder(${o.id})" style="${cardStyle}">
-        <div class="order-card-top">
-          <div>
-            <div class="order-customer">${customer}${statusBadge}</div>
-            <div class="order-time">Delivery: ${delivDate} &nbsp;|&nbsp; Placed: ${placedAt}</div>
-          </div>
-        </div>
-        <div class="order-footer">
+      <div class="order-row" style="${rowStyle}">
+        <div class="order-row-summary" onclick="toggleOrderRow(${o.id})">
+          <span class="order-row-caret">${isExpanded ? '▾' : '▸'}</span>
+          <span class="order-customer">${customer}${statusBadge}</span>
+          <span class="order-time">Delivery: ${delivDate}</span>
+          <span class="order-time">Placed: ${placedAt}</span>
           <span class="order-total">${totalDisplay}</span>
-          <button class="action-btn">VIEW &rarr;</button>
         </div>
+        ${isExpanded ? `<div class="order-row-detail" id="order-detail-${o.id}">Loading...</div>` : ''}
       </div>`;
   }).join('');
+  if (expandedOrderId != null && filteredOrders.some(o => o.id === expandedOrderId)) {
+    loadOrderDetailInline(expandedOrderId);
+  }
 }
 
-async function viewOrder(id) {
-  openModal('modal-order-detail');
-  document.getElementById('detail-body').innerHTML = 'Loading...';
-  document.getElementById('detail-footer').innerHTML = '';
+function toggleOrderRow(id) {
+  expandedOrderId = expandedOrderId === id ? null : id;
+  renderOrders();
+}
+
+async function loadOrderDetailInline(id) {
+  if (expandedOrderCache[id]) {
+    const el = document.getElementById(`order-detail-${id}`);
+    if (el) el.innerHTML = renderOrderDetailHTML(expandedOrderCache[id]);
+    return;
+  }
   const order = await api(`/api/orders/${id}`);
-  if (!order) return;
+  const el = document.getElementById(`order-detail-${id}`);
+  if (!order) { if (el) el.innerHTML = '<div class="empty-state">Failed to load order.</div>'; return; }
+  expandedOrderCache[id] = order;
+  if (el) el.innerHTML = renderOrderDetailHTML(order);
+}
+
+function renderOrderDetailHTML(order) {
   const customer = order.company_name || [order.first_name, order.last_name].filter(Boolean).join(' ') || 'Unknown';
   const items = (order.items || []).map(it =>
     `<tr><td>${it.description || it.sku}</td><td class="mono">${it.quantity} ${it.unit}</td><td class="mono">${it.unit_price ? '$'+parseFloat(it.unit_price).toFixed(2) : '—'}</td><td>${it.notes || ''}</td></tr>`
   ).join('');
-  document.getElementById('detail-title').textContent = `Order #${order.id} — ${customer}`;
   const isVoided = order.status === 'voided';
   const isModified = order.status === 'modified';
   const origTotal = order.original_total ? parseFloat(order.original_total).toFixed(2) : null;
@@ -899,7 +971,7 @@ async function viewOrder(id) {
     : isModified && origTotal && origTotal !== curTotal
     ? `<div style="background:#fffbe6;border:1px solid #d4a800;padding:8px 10px;margin-bottom:12px;font-size:11px;"><strong>MODIFIED IN QUICKBOOKS</strong> — Original total: <span style="text-decoration:line-through;">$${origTotal}</span> → Current: <strong>$${curTotal}</strong></div>`
     : '';
-  document.getElementById('detail-body').innerHTML = `
+  return `
     ${statusBanner}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">
       <div><div class="detail-label">Customer</div><div>${customer}</div></div>
@@ -911,20 +983,19 @@ async function viewOrder(id) {
     <table style="margin-top:4px;">
       <thead><tr><th>Product</th><th>Qty</th><th>Unit Price</th><th>Notes</th></tr></thead>
       <tbody>${items || '<tr><td colspan="4" class="empty-state">No line items</td></tr>'}</tbody>
-    </table>`;
-  document.getElementById('detail-footer').innerHTML =
-    `<button class="btn" style="background:var(--red);color:white;border-color:var(--red-dark);" onclick="deleteOrder(${order.id})">DELETE ORDER</button>`;
+    </table>
+    <div style="margin-top:12px;text-align:right;">
+      <button class="btn" style="background:var(--red);color:white;border-color:var(--red-dark);" onclick="deleteOrderInline(${order.id})">DELETE ORDER</button>
+    </div>`;
 }
 
-async function deleteOrder(id) {
+async function deleteOrderInline(id) {
   if (!confirm(`Delete order #${id}? This cannot be undone.`)) return;
   const res = await api(`/api/orders/${id}`, { method: 'DELETE' });
   if (res) {
-    closeModal('modal-order-detail');
-    allOrders = allOrders.filter(o => o.id !== id);
-    renderOrders();
-    updateStats();
-    checkPendingInvoices();
+    delete expandedOrderCache[id];
+    if (expandedOrderId === id) expandedOrderId = null;
+    await refreshOrdersAfterMutation();
   }
 }
 
@@ -1421,7 +1492,7 @@ ${body || '<p style="color:#888;font-style:italic;">No items for this date.</p>'
 function populateDropdowns() {
   const custSel = document.getElementById('no-customer');
   custSel.innerHTML = allCustomers.map(c => `<option value="${c.id}">${c.company_name}</option>`).join('');
-  document.getElementById('no-date').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('no-date').value = toLocalDateStr(new Date());
   document.getElementById('no-items-list').innerHTML = '';
   addOrderItemRow();
 }
@@ -1477,9 +1548,7 @@ async function submitOrder() {
   });
   if (res && res.id) {
     closeModal('modal-order');
-    allOrders = await api('/api/orders') || allOrders;
-    renderOrders();
-    updateStats();
+    await refreshOrdersAfterMutation();
   } else {
     showErr(errEl, (res && res.error) || 'Failed to create order');
   }
@@ -1557,7 +1626,7 @@ async function submitNewProduct() {
     price: parseFloat(document.getElementById('np-price').value) || 0,
     reorder_point: parseInt(document.getElementById('np-reorder').value) || 0,
     quantity_on_hand: parseFloat(document.getElementById('np-qty').value) || 0,
-    inv_start_date: document.getElementById('np-inv-date').value || new Date().toISOString().split('T')[0],
+    inv_start_date: document.getElementById('np-inv-date').value || toLocalDateStr(new Date()),
     show_price: document.getElementById('np-show-price').checked,
   };
 
@@ -1623,7 +1692,7 @@ function handleTopbarBtn() {
   else if (title === 'Customers') openModal('modal-customer');
   else if (title === 'Products') {
     openModal('modal-product');
-    document.getElementById('np-inv-date').value = new Date().toISOString().split('T')[0];
+    document.getElementById('np-inv-date').value = toLocalDateStr(new Date());
   }
   else if (title === 'Reports') loadPackingReport();
 }

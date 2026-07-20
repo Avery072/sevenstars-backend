@@ -77,8 +77,9 @@ AUTH
   GET   /api/auth/qb/callback    QB OAuth callback → store tokens
 
 ORDERS  (all require JWT)
-  GET   /api/orders              Last 3 days by delivery_date DESC
+  GET   /api/orders              Last 3 days by delivery_date DESC (default)
         ?date=YYYY-MM-DD         Specific delivery date
+        ?from=YYYY-MM-DD&to=YYYY-MM-DD  Explicit date range (admin portal's Today/3 Days/Week/Month filter)
   GET   /api/orders/:id          Order + line items + customer cut prefs
   POST  /api/orders              Manual order entry
 
@@ -106,10 +107,10 @@ WEBHOOKS  (no JWT — signature-verified)
 
 ## Key Design Decisions
 
-### Orders — flat 3-day history, no status
-- No order status field. The admin view is a flat read-only history.
-- Query always returns `delivery_date BETWEEN CURRENT_DATE - 2 days AND CURRENT_DATE`.
-- On server startup and every 24 hours, orders older than 3 days are hard-deleted (cascade removes line items).
+### Orders — flat history, no admin editing of order state
+- The admin view is a flat read-only history; `status` (`active`/`modified`/`voided`) only ever changes via QB webhook/sync, never directly by an admin.
+- Default query (no `from`/`to`/`date`) returns `delivery_date BETWEEN CURRENT_DATE - 2 days AND CURRENT_DATE` (3-day rolling window) — the admin portal's date-range filter (Today/3 Days/Week/Month, past or future) passes explicit `from`/`to` instead, computed client-side in local time.
+- On server startup and every 24 hours, orders older than **31 days** are hard-deleted (cascade removes line items) — kept just past a month so the "past month" filter never loses data at its own edge.
 
 ### Market price toggle (`show_price`)
 - `show_price = FALSE` → mobile app renders "Market Price" instead of a number.
