@@ -1,6 +1,11 @@
 require('dotenv').config();
 const path = require('path');
 const express = require('express');
+// Patches Express to forward rejected Promises from async route handlers to
+// the error middleware below, instead of letting them become unhandled
+// rejections that crash the whole process (Node 15+ default). Must be
+// required after express but before any router/route is defined.
+require('express-async-errors');
 const helmet = require('helmet');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
@@ -51,14 +56,29 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
+// Last-resort net for anything outside the Express request cycle that
+// express-async-errors can't see (background jobs, timers, stray promises
+// missing a .catch()) — log it and keep the process alive rather than
+// crashing the whole backend over one bad request's worth of fallout.
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled rejection (backend stayed up):', err);
+});
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception (backend stayed up):', err);
+});
+
+function runPurge() {
+  purgeOldOrders().catch(err => console.error('purgeOldOrders failed:', err.message));
+}
+
 // Only listen (and run the purge job) when this file is the actual entry
 // point — requiring it from tests should just build the app, no side effects.
 if (require.main === module) {
   const PORT = process.env.PORT || 3001;
   app.listen(PORT, () => {
     console.log(`Seven Stars backend running on port ${PORT}`);
-    purgeOldOrders();
-    setInterval(purgeOldOrders, 24 * 60 * 60 * 1000);
+    runPurge();
+    setInterval(runPurge, 24 * 60 * 60 * 1000);
   });
 }
 
