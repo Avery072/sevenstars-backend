@@ -16,7 +16,7 @@ async function getCustomer(req, res) {
 
 async function createCustomer(req, res) {
   const {
-    company_name, first_name, last_name, phone, email,
+    company_name, first_name, last_name, phone, email, address,
     language_pref, ordering_method, salmon_cut, buys_salmon,
     skin_off, scale, pbo, hg, notes,
   } = req.body;
@@ -25,12 +25,12 @@ async function createCustomer(req, res) {
 
   const result = await pool.query(
     `INSERT INTO customers
-       (company_name, first_name, last_name, phone, email,
+       (company_name, first_name, last_name, phone, email, address,
         language_pref, ordering_method, salmon_cut, buys_salmon,
         skin_off, scale, pbo, hg, notes)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      RETURNING *`,
-    [company_name, first_name, last_name, phone, email,
+    [company_name, first_name, last_name, phone, email, address || null,
       language_pref || 'English', ordering_method || 'Mobile App',
       salmon_cut, buys_salmon ?? false, skin_off ?? false, scale ?? false, pbo ?? false, hg ?? false, notes]
   );
@@ -43,7 +43,7 @@ async function updateCustomer(req, res) {
   const fields = req.body;
 
   const allowed = [
-    'company_name', 'first_name', 'last_name', 'phone', 'email',
+    'company_name', 'first_name', 'last_name', 'phone', 'email', 'address',
     'language_pref', 'ordering_method', 'salmon_cut', 'buys_salmon',
     'skin_off', 'scale', 'pbo', 'hg', 'notes', 'active',
   ];

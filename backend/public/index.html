@@ -456,6 +456,7 @@
         <div class="form-group"><label class="form-label">Phone</label><input class="form-input" id="nc-phone" placeholder="206-000-0000"></div>
         <div class="form-group"><label class="form-label">Email</label><input class="form-input" id="nc-email" placeholder="email@restaurant.com"></div>
       </div>
+      <div class="form-group"><label class="form-label">Address</label><input class="form-input" id="nc-address" placeholder="123 Main St, Seattle WA"></div>
       <div class="form-group">
         <label class="form-label">Language Preference</label>
         <select class="form-select" id="nc-lang"><option>English</option><option>Korean</option><option>Chinese</option><option>Japanese</option><option>Vietnamese</option></select>
@@ -1566,6 +1567,7 @@ async function submitCustomer() {
     last_name: document.getElementById('nc-last').value.trim() || null,
     phone: document.getElementById('nc-phone').value.trim() || null,
     email: document.getElementById('nc-email').value.trim() || null,
+    address: document.getElementById('nc-address').value.trim() || null,
     language_pref: document.getElementById('nc-lang').value,
     salmon_cut: document.getElementById('nc-cut').value || null,
     skin_off: document.getElementById('nc-skinoff').value === 'true',
@@ -1584,7 +1586,7 @@ async function submitCustomer() {
     renderSalmonCuts();
     updateStats();
     populateDropdowns();
-    ['nc-first','nc-last','nc-company','nc-phone','nc-email','nc-notes'].forEach(id => document.getElementById(id).value = '');
+    ['nc-first','nc-last','nc-company','nc-phone','nc-email','nc-address','nc-notes'].forEach(id => document.getElementById(id).value = '');
   } else {
     showErr(errEl, (res && res.error) || 'Failed to create customer');
   }
