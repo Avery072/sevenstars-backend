@@ -1505,7 +1505,8 @@ function filterOrderCustomerOptions(query) {
   const q = query.toLowerCase();
   // allCustomers is already alphabetical (ORDER BY company_name from the API)
   const list = q ? allCustomers.filter(c => c.company_name.toLowerCase().includes(q)) : allCustomers;
-  sel.innerHTML = list.map(c => `<option value="${c.id}">${c.company_name}</option>`).join('');
+  sel.innerHTML = '<option value="" selected disabled>Select a company…</option>'
+    + list.map(c => `<option value="${c.id}">${c.company_name}</option>`).join('');
   if (list.some(c => String(c.id) === prevValue)) sel.value = prevValue;
 }
 
@@ -1535,9 +1536,10 @@ function populateProductOptions(select, query) {
     p.description.toLowerCase().includes(q) || (p.sku || '').toLowerCase().includes(q)
   ) : sorted;
   const prevValue = select.value;
-  select.innerHTML = list.map(p =>
-    `<option value="${p.id}" data-price="${p.price||0}" data-unit="${p.unit||''}" data-show-price="${p.show_price ? '1' : '0'}">${p.description}${p.qb_item_id ? '' : ' [NO QB]'}</option>`
-  ).join('');
+  select.innerHTML = '<option value="" selected disabled>Select a product…</option>'
+    + list.map(p =>
+      `<option value="${p.id}" data-price="${p.price||0}" data-unit="${p.unit||''}" data-show-price="${p.show_price ? '1' : '0'}">${p.description}${p.qb_item_id ? '' : ' [NO QB]'}</option>`
+    ).join('');
   if (list.some(p => String(p.id) === prevValue)) select.value = prevValue;
 }
 
@@ -1550,7 +1552,7 @@ function filterOrderProductOptions(inputEl) {
 function syncUnit(sel) {
   const row = sel.closest('.order-item-row');
   const opt = sel.options[sel.selectedIndex];
-  if (!opt) {
+  if (!opt || !sel.value) {
     row.querySelector('.price-unit-display').textContent = '';
     row.querySelector('.price-display').textContent = '';
     return;
@@ -1567,17 +1569,27 @@ async function submitOrder() {
   const customer_id = document.getElementById('no-customer').value;
   const delivery_date = document.getElementById('no-date').value;
   const notes = document.getElementById('no-notes').value;
+  if (!customer_id) { showErr(errEl, 'Select a customer'); return; }
   if (!delivery_date) { showErr(errEl, 'Delivery date is required'); return; }
 
   const rows = document.getElementById('no-items-list').querySelectorAll('.order-item-row');
-  const items = Array.from(rows).map(row => {
+  const rowData = Array.from(rows).map(row => {
     const sel = row.querySelector('select');
     const input = row.querySelector('.qty-input');
     return {
-      product_id: parseInt(sel.value),
+      product_id: sel.value,
       quantity: parseFloat(input.value) || 0,
     };
-  }).filter(it => it.quantity > 0);
+  });
+
+  if (rowData.some(it => it.quantity > 0 && !it.product_id)) {
+    showErr(errEl, 'Select a product for each item with a quantity');
+    return;
+  }
+
+  const items = rowData
+    .filter(it => it.quantity > 0 && it.product_id)
+    .map(it => ({ product_id: parseInt(it.product_id), quantity: it.quantity }));
 
   if (!items.length) { showErr(errEl, 'Add at least one item with a quantity'); return; }
 
