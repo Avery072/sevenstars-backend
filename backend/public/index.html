@@ -417,6 +417,7 @@
     <div class="modal-body">
       <div class="form-group">
         <label class="form-label">Customer</label>
+        <input class="form-input" id="no-customer-search" placeholder="Search company..." autocomplete="off" oninput="filterOrderCustomerOptions(this.value)" style="margin-bottom:6px;">
         <select class="form-select" id="no-customer"></select>
       </div>
       <div class="form-group">
@@ -1491,32 +1492,69 @@ ${body || '<p style="color:#888;font-style:italic;">No items for this date.</p>'
 
 /* ── New Order modal ── */
 function populateDropdowns() {
-  const custSel = document.getElementById('no-customer');
-  custSel.innerHTML = allCustomers.map(c => `<option value="${c.id}">${c.company_name}</option>`).join('');
+  document.getElementById('no-customer-search').value = '';
+  filterOrderCustomerOptions('');
   document.getElementById('no-date').value = toLocalDateStr(new Date());
   document.getElementById('no-items-list').innerHTML = '';
   addOrderItemRow();
 }
 
+function filterOrderCustomerOptions(query) {
+  const sel = document.getElementById('no-customer');
+  const prevValue = sel.value;
+  const q = query.toLowerCase();
+  // allCustomers is already alphabetical (ORDER BY company_name from the API)
+  const list = q ? allCustomers.filter(c => c.company_name.toLowerCase().includes(q)) : allCustomers;
+  sel.innerHTML = list.map(c => `<option value="${c.id}">${c.company_name}</option>`).join('');
+  if (list.some(c => String(c.id) === prevValue)) sel.value = prevValue;
+}
+
 function addOrderItemRow() {
   const list = document.getElementById('no-items-list');
   const div = document.createElement('div');
-  div.style.cssText = 'display:grid;grid-template-columns:2fr 80px 80px auto;gap:6px;align-items:center;';
-  const productOptions = allProducts.map(p =>
+  div.className = 'order-item-row';
+  div.style.cssText = 'display:grid;grid-template-columns:2fr 80px 80px auto;gap:6px;align-items:start;';
+  div.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:4px;">
+      <input class="form-input" placeholder="Search product..." autocomplete="off" oninput="filterOrderProductOptions(this)" style="font-size:11px;">
+      <select class="form-select" onchange="syncUnit(this)"></select>
+    </div>
+    <input class="form-input qty-input" placeholder="Qty" type="number" value="1" min="0.01" step="0.01" style="margin-top:22px;">
+    <span class="price-unit-display" style="font-size:11px;color:var(--gray-dark);margin-top:26px;"></span>
+    <span class="price-display" style="font-size:12px;font-weight:bold;text-align:right;white-space:nowrap;margin-top:26px;"></span>`;
+  list.appendChild(div);
+  const select = div.querySelector('select');
+  populateProductOptions(select, '');
+  syncUnit(select);
+}
+
+function populateProductOptions(select, query) {
+  const q = query.toLowerCase();
+  const sorted = [...allProducts].sort((a, b) => a.description.localeCompare(b.description));
+  const list = q ? sorted.filter(p =>
+    p.description.toLowerCase().includes(q) || (p.sku || '').toLowerCase().includes(q)
+  ) : sorted;
+  const prevValue = select.value;
+  select.innerHTML = list.map(p =>
     `<option value="${p.id}" data-price="${p.price||0}" data-unit="${p.unit||''}" data-show-price="${p.show_price ? '1' : '0'}">${p.description}${p.qb_item_id ? '' : ' [NO QB]'}</option>`
   ).join('');
-  div.innerHTML = `
-    <select class="form-select" onchange="syncUnit(this)">${productOptions}</select>
-    <input class="form-input" placeholder="Qty" type="number" value="1" min="0.01" step="0.01">
-    <span class="price-unit-display" style="font-size:11px;color:var(--gray-dark);"></span>
-    <span class="price-display" style="font-size:12px;font-weight:bold;text-align:right;white-space:nowrap;"></span>`;
-  list.appendChild(div);
-  syncUnit(div.querySelector('select'));
+  if (list.some(p => String(p.id) === prevValue)) select.value = prevValue;
+}
+
+function filterOrderProductOptions(inputEl) {
+  const select = inputEl.nextElementSibling;
+  populateProductOptions(select, inputEl.value);
+  syncUnit(select);
 }
 
 function syncUnit(sel) {
-  const row = sel.closest('div');
+  const row = sel.closest('.order-item-row');
   const opt = sel.options[sel.selectedIndex];
+  if (!opt) {
+    row.querySelector('.price-unit-display').textContent = '';
+    row.querySelector('.price-display').textContent = '';
+    return;
+  }
   const unit = opt.dataset.unit;
   const price = opt.dataset.price;
   const showPrice = opt.dataset.showPrice === '1';
@@ -1531,10 +1569,10 @@ async function submitOrder() {
   const notes = document.getElementById('no-notes').value;
   if (!delivery_date) { showErr(errEl, 'Delivery date is required'); return; }
 
-  const rows = document.getElementById('no-items-list').querySelectorAll('div');
+  const rows = document.getElementById('no-items-list').querySelectorAll('.order-item-row');
   const items = Array.from(rows).map(row => {
     const sel = row.querySelector('select');
-    const input = row.querySelector('input');
+    const input = row.querySelector('.qty-input');
     return {
       product_id: parseInt(sel.value),
       quantity: parseFloat(input.value) || 0,
