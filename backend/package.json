@@ -9,6 +9,7 @@
     "test": "jest --runInBand"
   },
   "dependencies": {
+    "@getbrevo/brevo": "^6.0.2",
     "axios": "^1.7.2",
     "bcryptjs": "^2.4.3",
     "cloudinary": "^2.10.0",

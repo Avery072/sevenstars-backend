@@ -1,6 +1,11 @@
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
+const { sendPasswordResetCode } = require('../config/email');
+
+const RESET_CODE_TTL_MS = 15 * 60 * 1000;
+const MAX_RESET_ATTEMPTS = 5;
 
 // POST /api/auth/customer-login
 async function customerLogin(req, res) {
@@ -141,4 +146,72 @@ async function customerMe(req, res) {
   res.json(result.rows[0]);
 }
 
-module.exports = { customerLogin, customerSignup, customerMe, checkCompany };
+// POST /api/auth/forgot-password  { email }
+// Always responds with the same message regardless of whether the email is on
+// file, so the endpoint can't be used to enumerate accounts.
+async function customerForgotPassword(req, res) {
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ error: 'email required' });
+  }
+
+  const result = await pool.query('SELECT id, email FROM mobile_users WHERE email = $1', [email]);
+  const user = result.rows[0];
+
+  if (user) {
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const codeHash = await bcrypt.hash(code, 10);
+    const expiresAt = new Date(Date.now() + RESET_CODE_TTL_MS);
+
+    await pool.query(
+      `UPDATE mobile_users
+       SET reset_code_hash = $1, reset_code_expires_at = $2, reset_code_attempts = 0
+       WHERE id = $3`,
+      [codeHash, expiresAt, user.id]
+    );
+
+    await sendPasswordResetCode(user.email, code);
+  }
+
+  res.json({ message: 'If that account exists, a reset code has been sent to its email.' });
+}
+
+// POST /api/auth/reset-password  { email, code, new_password }
+async function customerResetPassword(req, res) {
+  const { email, code, new_password } = req.body;
+  if (!email || !code || !new_password) {
+    return res.status(400).json({ error: 'email, code, and new_password required' });
+  }
+  if (new_password.length < 8) {
+    return res.status(400).json({ error: 'new_password must be at least 8 characters' });
+  }
+
+  const result = await pool.query('SELECT * FROM mobile_users WHERE email = $1', [email]);
+  const user = result.rows[0];
+
+  if (!user || !user.reset_code_hash || new Date(user.reset_code_expires_at).getTime() < Date.now()) {
+    return res.status(400).json({ error: 'Invalid or expired code' });
+  }
+
+  if (user.reset_code_attempts >= MAX_RESET_ATTEMPTS) {
+    return res.status(429).json({ error: 'Too many attempts. Request a new code.' });
+  }
+
+  const matches = await bcrypt.compare(code, user.reset_code_hash);
+  if (!matches) {
+    await pool.query('UPDATE mobile_users SET reset_code_attempts = reset_code_attempts + 1 WHERE id = $1', [user.id]);
+    return res.status(400).json({ error: 'Invalid or expired code' });
+  }
+
+  const passwordHash = await bcrypt.hash(new_password, 10);
+  await pool.query(
+    `UPDATE mobile_users
+     SET password_hash = $1, reset_code_hash = NULL, reset_code_expires_at = NULL, reset_code_attempts = 0
+     WHERE id = $2`,
+    [passwordHash, user.id]
+  );
+
+  res.json({ message: 'Password updated successfully.' });
+}
+
+module.exports = { customerLogin, customerSignup, customerMe, checkCompany, customerForgotPassword, customerResetPassword };

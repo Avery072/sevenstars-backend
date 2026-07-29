@@ -72,9 +72,15 @@ admin_users (id, username UNIQUE, password_hash, created_at)
 
 ```
 AUTH
-  POST  /api/auth/login          Admin login → JWT
-  GET   /api/auth/qb             Start QB OAuth flow
-  GET   /api/auth/qb/callback    QB OAuth callback → store tokens
+  POST  /api/auth/login             Admin login → JWT
+  GET   /api/auth/qb                Start QB OAuth flow
+  GET   /api/auth/qb/callback       QB OAuth callback → store tokens
+
+  POST  /api/auth/customer-login    Mobile customer login → JWT
+  POST  /api/auth/customer-signup   Mobile customer signup
+  GET   /api/auth/customer-me       Current mobile user
+  POST  /api/auth/forgot-password   { email } → emails a 6-digit reset code (15 min TTL), for mobile_users
+  POST  /api/auth/reset-password    { email, code, new_password } → verifies code, sets new password
 
 ORDERS  (all require JWT)
   GET   /api/orders              Last 3 days by delivery_date DESC (default)
@@ -138,6 +144,8 @@ QB_REDIRECT_URI=https://yourdomain.com/api/auth/qb/callback
 QB_WEBHOOK_VERIFIER_TOKEN=         # from QB developer portal
 NODE_ENV=development               # use 'sandbox' QB endpoints in dev
 PORT=3001
+BREVO_API_KEY=                     # from Brevo dashboard, for mobile forgot-password emails (permanent free tier, 300/day)
+EMAIL_FROM=                        # sender address, must be a verified sender/domain in Brevo
 ```
 
 ---
