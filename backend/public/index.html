@@ -1501,7 +1501,7 @@ function populateDropdowns() {
 function addOrderItemRow() {
   const list = document.getElementById('no-items-list');
   const div = document.createElement('div');
-  div.style.cssText = 'display:grid;grid-template-columns:2fr 80px 80px auto;gap:6px;align-items:center;';
+  div.style.cssText = 'display:grid;grid-template-columns:2fr 80px 80px auto 24px;gap:6px;align-items:center;';
   const productOptions = allProducts.map(p =>
     `<option value="${p.id}" data-price="${p.price||0}" data-unit="${p.unit||''}" data-show-price="${p.show_price ? '1' : '0'}">${p.description}${p.qb_item_id ? '' : ' [NO QB]'}</option>`
   ).join('');
@@ -1509,9 +1509,14 @@ function addOrderItemRow() {
     <select class="form-select" onchange="syncUnit(this)">${productOptions}</select>
     <input class="form-input" placeholder="Qty" type="number" value="1" min="0.01" step="0.01">
     <span class="price-unit-display" style="font-size:11px;color:var(--gray-dark);"></span>
-    <span class="price-display" style="font-size:12px;font-weight:bold;text-align:right;white-space:nowrap;"></span>`;
+    <span class="price-display" style="font-size:12px;font-weight:bold;text-align:right;white-space:nowrap;"></span>
+    <button type="button" onclick="removeOrderItemRow(this)" title="Remove item" style="background:none;border:none;color:var(--red);font-size:16px;font-weight:bold;cursor:pointer;padding:0;line-height:1;">&times;</button>`;
   list.appendChild(div);
   syncUnit(div.querySelector('select'));
+}
+
+function removeOrderItemRow(btn) {
+  btn.closest('div').remove();
 }
 
 function syncUnit(sel) {
