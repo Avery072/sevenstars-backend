@@ -117,4 +117,30 @@ async function deleteAccount(req, res) {
   res.json({ message: `${name || email} deleted` });
 }
 
-module.exports = { listPending, approveCustomer, rejectCustomer, listPendingSubUsers, approveSubUser, rejectSubUser, listAllAccounts, deleteAccount };
+// Makes an active mobile_user the primary contact for their company, demoting
+// whoever currently holds is_main (if anyone) under the same customer_id.
+async function setMainUser(req, res) {
+  const { id } = req.params;
+  const user = await pool.query('SELECT id, name, email, is_main, active, customer_id FROM mobile_users WHERE id = $1', [id]);
+  if (!user.rows.length) return res.status(404).json({ error: 'Account not found' });
+
+  const { name, email, is_main, active, customer_id } = user.rows[0];
+  if (!active) return res.status(409).json({ error: 'Cannot make a pending account the primary contact' });
+  if (is_main) return res.json({ message: `${name || email} is already the primary account` });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('UPDATE mobile_users SET is_main = FALSE WHERE customer_id = $1 AND is_main = TRUE', [customer_id]);
+    await client.query('UPDATE mobile_users SET is_main = TRUE WHERE id = $1', [id]);
+    await client.query('COMMIT');
+    res.json({ message: `${name || email} is now the primary account` });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { listPending, approveCustomer, rejectCustomer, listPendingSubUsers, approveSubUser, rejectSubUser, listAllAccounts, deleteAccount, setMainUser };

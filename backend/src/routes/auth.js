@@ -9,6 +9,7 @@ const {
   checkCompany,
   customerForgotPassword,
   customerResetPassword,
+  customerDeleteAccount,
 } = require('../controllers/customerAuthController');
 const { requireCustomerAuth } = require('../middleware/auth');
 
@@ -31,6 +32,7 @@ router.get('/qb-status', qbStatus);
 router.post('/customer-login', customerLogin);
 router.post('/customer-signup', customerSignup);
 router.get('/customer-me', requireCustomerAuth, customerMe);
+router.delete('/customer-me', requireCustomerAuth, customerDeleteAccount);
 router.get('/check-company', checkCompany);
 router.post('/forgot-password', resetLimiter, customerForgotPassword);
 router.post('/reset-password', resetLimiter, customerResetPassword);

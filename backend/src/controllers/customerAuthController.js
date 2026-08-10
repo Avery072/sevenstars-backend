@@ -214,4 +214,47 @@ async function customerResetPassword(req, res) {
   res.json({ message: 'Password updated successfully.' });
 }
 
-module.exports = { customerLogin, customerSignup, customerMe, checkCompany, customerForgotPassword, customerResetPassword };
+// DELETE /api/auth/customer-me — deletes only the requesting mobile_users row
+// (the personal login), never the customers/company record, which is mirrored
+// with QuickBooks and tied to real order history. If the deleting user is the
+// company's is_main contact, the oldest other active user under the same
+// customer_id is auto-promoted first so the company doesn't lose its ability
+// to manage/approve team members.
+async function customerDeleteAccount(req, res) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const user = await client.query(
+      'SELECT id, is_main, customer_id FROM mobile_users WHERE id = $1 FOR UPDATE',
+      [req.user.user_id]
+    );
+    if (!user.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Account not found' });
+    }
+
+    const { is_main, customer_id } = user.rows[0];
+    if (is_main) {
+      const successor = await client.query(
+        `SELECT id FROM mobile_users
+         WHERE customer_id = $1 AND id != $2 AND active = TRUE
+         ORDER BY created_at ASC LIMIT 1`,
+        [customer_id, req.user.user_id]
+      );
+      if (successor.rows.length) {
+        await client.query('UPDATE mobile_users SET is_main = TRUE WHERE id = $1', [successor.rows[0].id]);
+      }
+    }
+
+    await client.query('DELETE FROM mobile_users WHERE id = $1', [req.user.user_id]);
+    await client.query('COMMIT');
+    res.json({ message: 'Account deleted' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { customerLogin, customerSignup, customerMe, checkCompany, customerForgotPassword, customerResetPassword, customerDeleteAccount };

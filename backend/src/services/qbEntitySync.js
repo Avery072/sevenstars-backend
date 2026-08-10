@@ -1,6 +1,6 @@
 const pool = require('../config/db');
 
-const ITEM_FIELDS = ['qb_item_id', 'sku', 'description', 'unit', 'price', 'cost', 'active'];
+const ITEM_FIELDS = ['qb_item_id', 'sku', 'description', 'category', 'unit', 'price', 'cost', 'active'];
 const CUSTOMER_FIELDS = ['company_name', 'first_name', 'last_name', 'phone', 'email', 'active'];
 
 function diffFields(existing, incoming, fields) {
@@ -26,6 +26,10 @@ async function upsertQBItem(item) {
     qb_item_id: item.Id,
     sku: item.Name,
     description: item.Description || item.Name,
+    // QB only nests an item under a category when SubItem is true — ParentRef
+    // can be present-but-irrelevant otherwise, so gate on SubItem explicitly
+    // rather than just checking for ParentRef's existence.
+    category: item.SubItem ? (item.ParentRef?.name || null) : null,
     unit: item.UnitOfMeasure || 'ea',
     price: Number(item.UnitPrice || 0),
     cost: Number(item.PurchaseCost || 0),
@@ -33,7 +37,7 @@ async function upsertQBItem(item) {
   };
 
   const existingResult = await pool.query(
-    `SELECT id, qb_item_id, sku, description, unit, price, cost, active
+    `SELECT id, qb_item_id, sku, description, category, unit, price, cost, active
      FROM products
      WHERE qb_item_id = $1 OR (qb_item_id IS NULL AND LOWER(sku) = LOWER($2))
      ORDER BY qb_item_id NULLS LAST
@@ -43,9 +47,9 @@ async function upsertQBItem(item) {
 
   if (!existingResult.rows.length) {
     await pool.query(
-      `INSERT INTO products (qb_item_id, sku, description, unit, price, cost, active, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
-      [incoming.qb_item_id, incoming.sku, incoming.description, incoming.unit, incoming.price, incoming.cost, incoming.active]
+      `INSERT INTO products (qb_item_id, sku, description, category, unit, price, cost, active, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
+      [incoming.qb_item_id, incoming.sku, incoming.description, incoming.category, incoming.unit, incoming.price, incoming.cost, incoming.active]
     );
     return { status: 'created', sku: incoming.sku, description: incoming.description };
   }
@@ -54,11 +58,23 @@ async function upsertQBItem(item) {
   const changes = diffFields(existing, incoming, ITEM_FIELDS);
   if (!Object.keys(changes).length) return null;
 
+  // Never overwrite an existing category with NULL — e.g. an item the CSV
+  // import already categorized but that isn't SubItem-nested in QB yet
+  // (see category_migration.md Phase 0 findings). QB-sourced categorization
+  // is only ever additive/corrective here, never destructive.
+  const nextCategory = incoming.category !== null ? incoming.category : existing.category;
+  if (nextCategory !== existing.category) {
+    changes.category = { from: existing.category, to: nextCategory };
+  } else {
+    delete changes.category;
+  }
+  if (!Object.keys(changes).length) return null;
+
   await pool.query(
     `UPDATE products
-     SET qb_item_id = $1, sku = $2, description = $3, unit = $4, price = $5, cost = $6, active = $7, updated_at = NOW()
-     WHERE id = $8`,
-    [incoming.qb_item_id, incoming.sku, incoming.description, incoming.unit, incoming.price, incoming.cost, incoming.active, existing.id]
+     SET qb_item_id = $1, sku = $2, description = $3, category = $4, unit = $5, price = $6, cost = $7, active = $8, updated_at = NOW()
+     WHERE id = $9`,
+    [incoming.qb_item_id, incoming.sku, incoming.description, nextCategory, incoming.unit, incoming.price, incoming.cost, incoming.active, existing.id]
   );
 
   return { status: 'updated', sku: incoming.sku, description: incoming.description, changes };

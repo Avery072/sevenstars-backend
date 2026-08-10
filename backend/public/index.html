@@ -1848,6 +1848,9 @@ function renderAccounts(q = '') {
       const statusBadge = u.user_active
         ? '<span class="badge badge-green">ACTIVE</span>'
         : '<span class="badge badge-amber">PENDING</span>';
+      const safeName = (u.name||u.email).replace(/'/g,"\\'");
+      const setMainBtn = (!u.is_main && u.user_active)
+        ? `<button class="action-btn" onclick="setMainUser(${u.user_id},'${safeName}')">SET MAIN</button>` : '';
       return `<tr>
         <td style="padding-left:24px;color:var(--gray-dark);font-size:11px;">↳</td>
         <td>${u.name || '—'}</td>
@@ -1855,7 +1858,10 @@ function renderAccounts(q = '') {
         <td>${roleBadge}</td>
         <td>${statusBadge}</td>
         <td style="font-size:11px;color:var(--gray-dark);">${date}</td>
-        <td><button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="deleteAccount(${u.user_id},'${(u.name||u.email).replace(/'/g,"\\'")}')">&#10005; DELETE</button></td>
+        <td>
+          ${setMainBtn}
+          <button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="deleteAccount(${u.user_id},'${safeName}')">&#10005; DELETE</button>
+        </td>
       </tr>`;
     }).join('');
 
@@ -1866,6 +1872,14 @@ function renderAccounts(q = '') {
 async function deleteAccount(id, name) {
   if (!confirm(`Delete account for ${name}? This cannot be undone.`)) return;
   const res = await api(`/api/admin/accounts/user/${id}`, { method: 'DELETE' });
+  if (!res) return;
+  if (res.error) { alert(res.error); return; }
+  await loadAccounts();
+}
+
+async function setMainUser(id, name) {
+  if (!confirm(`Make ${name} the primary account for this company?`)) return;
+  const res = await api(`/api/admin/accounts/user/${id}/set-main`, { method: 'POST' });
   if (!res) return;
   if (res.error) { alert(res.error); return; }
   await loadAccounts();
