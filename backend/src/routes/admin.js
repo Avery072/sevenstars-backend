@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { requireAuth } = require('../middleware/auth');
-const { syncFromQB, syncInvoicesFromQB } = require('../controllers/syncController');
+const { syncFromQB, syncInvoicesFromQB, reconcileOrders } = require('../controllers/syncController');
 const { getPackingReport, getSalmonPullReport, syncPendingInvoices } = require('../controllers/ordersController');
 const { listPending, approveCustomer, rejectCustomer, listPendingSubUsers, approveSubUser, rejectSubUser, listAllAccounts, deleteAccount, setMainUser } = require('../controllers/approvalController');
 const { generateDailyPull } = require('../controllers/dailyPullController');
@@ -10,6 +10,7 @@ router.use(requireAuth);
 
 router.post('/sync-from-qb', syncFromQB);
 router.post('/sync-invoices-from-qb', syncInvoicesFromQB);
+router.post('/reconcile-orders', reconcileOrders);
 router.post('/sync-pending-invoices', syncPendingInvoices);
 router.get('/packing-report', getPackingReport);
 router.get('/salmon-pull', getSalmonPullReport);

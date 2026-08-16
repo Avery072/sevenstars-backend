@@ -18,6 +18,7 @@ const webhookRoutes = require('./routes/webhooks');
 const adminRoutes = require('./routes/admin');
 const mobileRoutes = require('./routes/mobile');
 const { purgeOldOrders } = require('./controllers/ordersController');
+const { runReconciliation } = require('./controllers/syncController');
 
 const app = express();
 
@@ -71,14 +72,46 @@ function runPurge() {
   purgeOldOrders().catch(err => console.error('purgeOldOrders failed:', err.message));
 }
 
-// Only listen (and run the purge job) when this file is the actual entry
-// point — requiring it from tests should just build the app, no side effects.
+// QB webhook delivery is explicitly best-effort (Intuit doesn't guarantee
+// delivery, ordering, or retry-until-success) — this periodic sweep is the
+// actual correctness backstop, not just the manual "Check QB Discrepancies"
+// button's automated twin. Window is intentionally tight (a few days each
+// side of today) to keep each run cheap and stay well under QB's per-minute
+// API rate limit — widen it, or run the admin button by hand, for anything
+// further out.
+function reconciliationWindow() {
+  const addDays = (d, n) => { const r = new Date(d); r.setDate(r.getDate() + n); return r; };
+  const fmt = (d) => d.toISOString().slice(0, 10);
+  const today = new Date();
+  return { from: fmt(addDays(today, -3)), to: fmt(addDays(today, 3)) };
+}
+
+function runAutoReconcile() {
+  const { from, to } = reconciliationWindow();
+  runReconciliation(from, to)
+    .then(result => {
+      if (result.error) {
+        console.error(`Auto-reconcile (${from} to ${to}) failed:`, result.error);
+        return;
+      }
+      const { pushed, pulled, updated, voided, linesAdded, linesRemoved, linesChanged } = result;
+      if (pushed || pulled || updated || voided || linesAdded || linesRemoved || linesChanged) {
+        console.log(`Auto-reconcile (${from} to ${to}): ${pushed} pushed, ${pulled} pulled, ${updated} updated, ${voided} voided, lines +${linesAdded}/-${linesRemoved}/~${linesChanged}`);
+      }
+    })
+    .catch(err => console.error(`Auto-reconcile (${from} to ${to}) threw:`, err.message));
+}
+
+// Only listen (and run the background jobs) when this file is the actual
+// entry point — requiring it from tests should just build the app, no side effects.
 if (require.main === module) {
   const PORT = process.env.PORT || 3001;
   app.listen(PORT, () => {
     console.log(`Seven Stars backend running on port ${PORT}`);
     runPurge();
     setInterval(runPurge, 24 * 60 * 60 * 1000);
+    runAutoReconcile();
+    setInterval(runAutoReconcile, 20 * 60 * 1000);
   });
 }
 

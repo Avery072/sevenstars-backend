@@ -240,6 +240,7 @@
       <div class="topbar-right">
         <button class="btn btn-outline" id="sync-pending-btn" onclick="syncPendingInvoices()" style="display:none;font-size:11px;">&#8635; SYNC PENDING TO QB</button>
         <button class="btn btn-outline" id="sync-invoices-btn" onclick="openQBPullModal()" style="font-size:11px;">&#8595; PULL INVOICES FROM QB</button>
+        <button class="btn btn-outline" id="reconcile-btn" onclick="checkDiscrepancies()" style="font-size:11px;">&#8635; CHECK QB DISCREPANCIES</button>
         <button class="btn btn-primary" id="topbar-btn" onclick="handleTopbarBtn()">+ NEW ORDER</button>
       </div>
     </div>
@@ -340,7 +341,7 @@
         <div class="table-card">
           <div class="table-header"><div class="table-title">Inventory Levels</div></div>
           <table>
-            <thead><tr><th>SKU</th><th>Product</th><th>Unit</th><th>Qty on Hand</th><th>Reorder Pt</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>SKU</th><th>Product</th><th>Unit</th><th>Qty on Hand</th><th>Reorder Pt</th><th>Status</th></tr></thead>
             <tbody id="inventory-body">
               <tr><td colspan="6" class="empty-state">Loading...</td></tr>
             </tbody>
@@ -631,12 +632,9 @@
       </div>
       <div class="form-row">
         <div class="form-group">
-          <label>Initial Qty on Hand <span style="color:red">*</span></label>
-          <input id="np-qty" type="number" step="1" pattern="[0-9]*" placeholder="0" />
-        </div>
-        <div class="form-group">
           <label>As of Date <span style="color:red">*</span></label>
           <input id="np-inv-date" type="date" />
+          <div style="font-size:11px;color:var(--gray-dark);margin-top:2px;">Starting quantity is entered in QuickBooks (e.g. via a PO), not here — it syncs in automatically.</div>
         </div>
       </div>
       <div class="form-group" style="display:flex;align-items:center;gap:8px;">
@@ -842,11 +840,48 @@ async function syncPendingInvoices() {
   }
 }
 
+// Bidirectional reconciliation for the currently-selected order date-range
+// window: local orders QB doesn't have yet get pushed to QB, and every QB
+// invoice in the window is reconciled against local state (pulls in anything
+// missing locally, updates/removes line items, detects voids). QB stays the
+// only source of destructive changes; this only ever heals gaps additively.
+async function checkDiscrepancies() {
+  const btn = document.getElementById('reconcile-btn');
+  btn.textContent = '⏳ Checking...';
+  btn.disabled = true;
+  const { from, to } = computeOrderDateRange(orderFilterRange, orderFilterDirection);
+  const res = await api(`/api/admin/reconcile-orders?from=${from}&to=${to}`, { method: 'POST' });
+  btn.disabled = false;
+  btn.textContent = '↻ CHECK QB DISCREPANCIES';
+  if (res) {
+    alert(
+      `Checked ${res.checked} QB invoice(s) — ${res.pushed} pushed to QB, ${res.pulled} pulled from QB, ` +
+      `${res.updated} updated, ${res.voided} voided.\n` +
+      `Lines: +${res.linesAdded} added, -${res.linesRemoved} removed, ~${res.linesChanged} changed.` +
+      (res.pushFailed ? `\n${res.pushFailed} push(es) failed — see server logs.` : '')
+    );
+    await refreshOrdersAfterMutation();
+  }
+}
+
 function checkPendingInvoices() {
-  const pending = allOrders.filter(o => !o.qb_invoice_id).length;
+  const pendingOrders = allOrders.filter(o => !o.qb_invoice_id);
+  const stuck = pendingOrders.filter(o => o.push_attempts > 0);
   const btn = document.getElementById('sync-pending-btn');
-  btn.style.display = pending > 0 ? '' : 'none';
-  btn.textContent = `↻ SYNC PENDING TO QB (${pending})`;
+  btn.style.display = pendingOrders.length > 0 ? '' : 'none';
+  if (stuck.length > 0) {
+    btn.textContent = `⚠ ${stuck.length} STUCK — SYNC PENDING TO QB (${pendingOrders.length})`;
+    btn.style.background = 'var(--red-light)';
+    btn.style.borderColor = 'var(--red-dark)';
+    btn.style.color = 'var(--red-dark)';
+    btn.title = stuck.map(o => `Order #${o.id}: ${o.push_attempts} failed attempt(s) — ${o.last_push_error || 'unknown error'}`).join('\n');
+  } else {
+    btn.textContent = `↻ SYNC PENDING TO QB (${pendingOrders.length})`;
+    btn.style.background = '';
+    btn.style.borderColor = '';
+    btn.style.color = '';
+    btn.title = '';
+  }
 }
 
 /* ── Stats (always reflect the fixed 3-day baseline, independent of the order-list filter below) ── */
@@ -973,6 +1008,9 @@ function renderOrderDetailHTML(order) {
   const items = (order.items || []).map(it =>
     `<tr><td>${it.description || it.sku}</td><td class="mono">${it.quantity} ${it.unit}</td><td class="mono">${it.unit_price ? '$'+parseFloat(it.unit_price).toFixed(2) : '—'}</td><td>${it.notes || ''}</td></tr>`
   ).join('');
+  const removedItems = (order.removed_items || []).map(it =>
+    `<tr style="opacity:0.5;text-decoration:line-through;"><td>${it.description || it.sku}</td><td class="mono">${it.quantity} ${it.unit}</td><td class="mono">${it.unit_price ? '$'+parseFloat(it.unit_price).toFixed(2) : '—'}</td><td>Removed in QB</td></tr>`
+  ).join('');
   const isVoided = order.status === 'voided';
   const isModified = order.status === 'modified';
   const origTotal = order.original_total ? parseFloat(order.original_total).toFixed(2) : null;
@@ -993,7 +1031,7 @@ function renderOrderDetailHTML(order) {
     ${order.salmon_cut ? `<div style="background:var(--red-light);padding:8px 10px;margin-bottom:12px;font-size:11px;"><strong>Salmon Spec:</strong> ${order.salmon_cut}${order.skin_off?' · Skin Off':''}${order.scale?' · Scale':''}${order.pbo?' · PBO':''}${order.hg?' · H&G':''}</div>` : ''}
     <table style="margin-top:4px;">
       <thead><tr><th>Product</th><th>Qty</th><th>Unit Price</th><th>Notes</th></tr></thead>
-      <tbody>${items || '<tr><td colspan="4" class="empty-state">No line items</td></tr>'}</tbody>
+      <tbody>${items || '<tr><td colspan="4" class="empty-state">No line items</td></tr>'}${removedItems}</tbody>
     </table>
     <div style="margin-top:12px;text-align:right;">
       <button class="btn" style="background:var(--red);color:white;border-color:var(--red-dark);" onclick="deleteOrderInline(${order.id})">DELETE ORDER</button>
@@ -1185,57 +1223,15 @@ function renderInventory() {
     const status = p.quantity_on_hand <= 0 ? '<span class="badge badge-red">OUT OF STOCK</span>'
       : p.reorder_point && p.quantity_on_hand <= p.reorder_point ? '<span class="badge badge-amber">LOW</span>'
       : '<span class="badge badge-green">IN STOCK</span>';
-    const oos = p.quantity_on_hand <= 0;
     return `<tr>
       <td class="mono" style="font-size:11px;">${p.sku}</td>
       <td>${p.description}</td>
       <td class="mono">${p.unit}</td>
-      <td class="mono">
-        <input type="number" step="0.01" value="${p.quantity_on_hand ?? 0}"
-          style="width:70px;padding:2px 5px;border:1px solid var(--border);font-family:Courier New,monospace;font-size:12px;background:#FFFFF0;"
-          onchange="updateQty(${p.id}, this.value, this)">
-      </td>
+      <td class="mono" title="Synced from QuickBooks — edit in QB to change">${p.quantity_on_hand ?? 0}</td>
       <td class="mono">${p.reorder_point ?? '—'}</td>
       <td id="inv-status-${p.id}">${status}</td>
-      <td>
-        <button class="action-btn" onclick="toggleOOS(${p.id}, ${oos})"
-          style="${oos ? 'background:#E2EFDA;color:#375623;border-color:#375623;' : 'background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);'}">
-          ${oos ? '&#10004; MARK IN STOCK' : 'MARK OUT OF STOCK'}
-        </button>
-      </td>
     </tr>`;
-  }).join('') || '<tr><td colspan="7" class="empty-state">No products.</td></tr>';
-}
-
-async function updateQty(id, value, inputEl) {
-  const qty = parseFloat(value);
-  if (isNaN(qty)) return;
-  const res = await api(`/api/products/${id}`, { method: 'PATCH', body: JSON.stringify({ quantity_on_hand: qty }) });
-  if (res && res.id) {
-    const p = allProducts.find(p => p.id === id);
-    if (p) p.quantity_on_hand = qty;
-    const statusEl = document.getElementById(`inv-status-${id}`);
-    if (statusEl) {
-      statusEl.innerHTML = qty <= 0 ? '<span class="badge badge-red">OUT OF STOCK</span>'
-        : p.reorder_point && qty <= p.reorder_point ? '<span class="badge badge-amber">LOW</span>'
-        : '<span class="badge badge-green">IN STOCK</span>';
-    }
-  } else {
-    alert('Failed to update quantity');
-    inputEl.value = allProducts.find(p => p.id === id)?.quantity_on_hand ?? 0;
-  }
-}
-
-async function toggleOOS(id, currentlyOOS) {
-  const newQty = currentlyOOS ? 1 : 0;
-  const res = await api(`/api/products/${id}`, { method: 'PATCH', body: JSON.stringify({ quantity_on_hand: newQty }) });
-  if (res && res.id) {
-    const p = allProducts.find(p => p.id === id);
-    if (p) p.quantity_on_hand = newQty;
-    renderInventory();
-  } else {
-    alert('Failed to update stock status');
-  }
+  }).join('') || '<tr><td colspan="6" class="empty-state">No products.</td></tr>';
 }
 
 /* ── Packing Report ── */
@@ -1708,7 +1704,6 @@ async function submitNewProduct() {
     cost: parseFloat(document.getElementById('np-cost').value) || 0,
     price: parseFloat(document.getElementById('np-price').value) || 0,
     reorder_point: parseInt(document.getElementById('np-reorder').value) || 0,
-    quantity_on_hand: parseFloat(document.getElementById('np-qty').value) || 0,
     inv_start_date: document.getElementById('np-inv-date').value || toLocalDateStr(new Date()),
     show_price: document.getElementById('np-show-price').checked,
   };
@@ -1724,7 +1719,7 @@ async function submitNewProduct() {
       closeModal('modal-product');
       showToast(`✓ ${description} created successfully`);
       ['np-sku','np-description','np-unit','np-vendor',
-       'np-cost','np-price','np-reorder','np-qty','np-inv-date'].forEach(id => document.getElementById(id).value = '');
+       'np-cost','np-price','np-reorder','np-inv-date'].forEach(id => document.getElementById(id).value = '');
       document.getElementById('np-category').value = '';
       document.getElementById('np-show-price').checked = true;
     } else {
@@ -1737,20 +1732,6 @@ async function submitNewProduct() {
   }
 }
 
-function updateProductQtyStep() {
-  const unit = document.getElementById('np-unit').value;
-  const qty = document.getElementById('np-qty');
-  if (unit === 'ea') {
-    qty.setAttribute('step', '1');
-    qty.setAttribute('pattern', '[0-9]*');
-  } else {
-    qty.setAttribute('step', '0.01');
-    qty.removeAttribute('pattern');
-  }
-}
-
-document.getElementById('np-unit').addEventListener('change', updateProductQtyStep);
-updateProductQtyStep();
 
 /* ── Navigation ── */
 const panelTitles = { orders:'Orders', packing:'Reports', products:'Products', salmon:'Salmon Cuts', inventory:'Inventory', customers:'Customers', accounts:'User Accounts', pending:'Pending Approvals' };
@@ -1848,9 +1829,6 @@ function renderAccounts(q = '') {
       const statusBadge = u.user_active
         ? '<span class="badge badge-green">ACTIVE</span>'
         : '<span class="badge badge-amber">PENDING</span>';
-      const safeName = (u.name||u.email).replace(/'/g,"\\'");
-      const setMainBtn = (!u.is_main && u.user_active)
-        ? `<button class="action-btn" onclick="setMainUser(${u.user_id},'${safeName}')">SET MAIN</button>` : '';
       return `<tr>
         <td style="padding-left:24px;color:var(--gray-dark);font-size:11px;">↳</td>
         <td>${u.name || '—'}</td>
@@ -1858,10 +1836,7 @@ function renderAccounts(q = '') {
         <td>${roleBadge}</td>
         <td>${statusBadge}</td>
         <td style="font-size:11px;color:var(--gray-dark);">${date}</td>
-        <td>
-          ${setMainBtn}
-          <button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="deleteAccount(${u.user_id},'${safeName}')">&#10005; DELETE</button>
-        </td>
+        <td><button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="deleteAccount(${u.user_id},'${(u.name||u.email).replace(/'/g,"\\'")}')">&#10005; DELETE</button></td>
       </tr>`;
     }).join('');
 
@@ -1872,14 +1847,6 @@ function renderAccounts(q = '') {
 async function deleteAccount(id, name) {
   if (!confirm(`Delete account for ${name}? This cannot be undone.`)) return;
   const res = await api(`/api/admin/accounts/user/${id}`, { method: 'DELETE' });
-  if (!res) return;
-  if (res.error) { alert(res.error); return; }
-  await loadAccounts();
-}
-
-async function setMainUser(id, name) {
-  if (!confirm(`Make ${name} the primary account for this company?`)) return;
-  const res = await api(`/api/admin/accounts/user/${id}/set-main`, { method: 'POST' });
   if (!res) return;
   if (res.error) { alert(res.error); return; }
   await loadAccounts();

@@ -1,7 +1,9 @@
+const pool = require('../config/db');
 const { queryQBAll } = require('../middleware/qbSync');
 const { processInvoice } = require('./webhooksController');
 const { getQBClient } = require('../middleware/qbSync');
 const { upsertQBItem, upsertQBCustomer } = require('../services/qbEntitySync');
+const { pushToQB } = require('./ordersController');
 
 async function syncFromQB(req, res) {
   let items, customers;
@@ -114,8 +116,8 @@ async function syncInvoicesFromQB(req, res) {
   for (const inv of invoices) {
     try {
       const result = await processInvoice(inv);
-      if (result === 'created') created++;
-      else if (result === 'updated') updated++;
+      if (result.status === 'created') created++;
+      else if (result.status === 'updated' || result.status === 'voided') updated++;
       else skipped++;
     } catch (err) {
       console.error(`Failed to sync QB invoice ${inv.Id}:`, err.message);
@@ -126,4 +128,103 @@ async function syncInvoicesFromQB(req, res) {
   res.json({ message: 'Invoice sync complete', date: sinceStr, total: invoices.length, created, updated, skipped });
 }
 
-module.exports = { syncFromQB, syncInvoicesFromQB };
+// Fetches all QB invoices with TxnDate in [from, to], paginated.
+async function queryQBInvoicesInRange(from, to) {
+  const client = await getQBClient();
+  const pageSize = 1000;
+  let startPosition = 1;
+  const invoices = [];
+  while (true) {
+    const query = `SELECT * FROM Invoice WHERE TxnDate >= '${from}' AND TxnDate <= '${to}' MAXRESULTS ${pageSize} STARTPOSITION ${startPosition}`;
+    const { data } = await client.get(`/query?query=${encodeURIComponent(query)}&minorversion=65`);
+    const rows = data?.QueryResponse?.Invoice || [];
+    invoices.push(...rows);
+    if (rows.length < pageSize) break;
+    startPosition += pageSize;
+  }
+  return invoices;
+}
+
+// Bidirectional reconciliation for a date-range window (the admin portal's
+// currently-selected order filter): local orders QB doesn't have yet get pushed
+// to QB (additive — the app never deletes on QB's behalf), and every QB invoice
+// in the window is reconciled against local state via processInvoice, which
+// pulls in anything missing locally and applies line-level updates/removals/void
+// detection to anything that already exists. QB stays the sole source of
+// destructive changes (line removal, voiding); existence gaps are healed
+// additively on whichever side is missing the record.
+async function reconcileOrders(req, res) {
+  const { from, to } = req.query;
+  if (!from || !to) {
+    return res.status(400).json({ error: 'from and to query params are required (YYYY-MM-DD)' });
+  }
+  const result = await runReconciliation(from, to);
+  if (result.error) return res.status(result.status).json({ error: result.error });
+  res.json(result);
+}
+
+// Core reconciliation logic, shared by the admin "Check QB Discrepancies"
+// button and the periodic background job in app.js — QB webhook delivery is
+// explicitly best-effort (Intuit doesn't guarantee delivery, ordering, or
+// retry-until-success), so this is the actual correctness backstop, not just
+// a manual convenience.
+async function runReconciliation(from, to) {
+  let pushed = 0, pushFailed = 0;
+  const { rows: pendingOrders } = await pool.query(
+    `SELECT * FROM orders WHERE delivery_date BETWEEN $1 AND $2 AND qb_invoice_id IS NULL`,
+    [from, to]
+  );
+  for (const order of pendingOrders) {
+    const { rows: items } = await pool.query(
+      `SELECT * FROM order_items WHERE order_id = $1 AND status = 'active'`,
+      [order.id]
+    );
+    try {
+      await pushToQB(order, items);
+      pushed++;
+    } catch (err) {
+      const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+      console.error(`Reconcile: push failed for order ${order.id}:`, detail);
+      pushFailed++;
+    }
+  }
+
+  let invoices;
+  try {
+    invoices = await queryQBInvoicesInRange(from, to);
+  } catch (err) {
+    if (err.message?.includes('Refresh token')) {
+      return { error: 'QB token expired. Re-authorize at /api/auth/qb', status: 401 };
+    }
+    throw err;
+  }
+
+  let pulled = 0, updated = 0, voided = 0, skipped = 0;
+  let linesAdded = 0, linesRemoved = 0, linesChanged = 0;
+  for (const inv of invoices) {
+    try {
+      const result = await processInvoice(inv);
+      if (result.status === 'created') pulled++;
+      else if (result.status === 'updated') updated++;
+      else if (result.status === 'voided') voided++;
+      else skipped++;
+      linesAdded += result.linesAdded || 0;
+      linesRemoved += result.linesRemoved || 0;
+      linesChanged += result.linesChanged || 0;
+    } catch (err) {
+      console.error(`Reconcile: failed to process QB invoice ${inv.Id}:`, err.message);
+      skipped++;
+    }
+  }
+
+  return {
+    message: 'Reconciliation complete',
+    from, to,
+    pushed, pushFailed,
+    checked: invoices.length,
+    pulled, updated, voided, skipped,
+    linesAdded, linesRemoved, linesChanged,
+  };
+}
+
+module.exports = { syncFromQB, syncInvoicesFromQB, reconcileOrders, runReconciliation };

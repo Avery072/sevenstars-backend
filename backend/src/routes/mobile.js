@@ -2,14 +2,17 @@ const express = require('express');
 const router = express.Router();
 const { requireCustomerAuth } = require('../middleware/auth');
 const pool = require('../config/db');
-const { pushToQB } = require('../controllers/ordersController');
+const { pushToQB, checkAndReserveStock } = require('../controllers/ordersController');
 
 router.use(requireCustomerAuth);
 
-// GET /api/mobile/products — active products; price hidden when show_price = false
+// GET /api/mobile/products — active products; price hidden when show_price = false.
+// quantity_on_hand here is available-to-order (QB's synced count minus what's
+// already reserved by pending orders), not the raw QB number.
 router.get('/products', async (req, res) => {
   const result = await pool.query(
-    `SELECT id, sku, description, category, unit, show_price, image_url, quantity_on_hand,
+    `SELECT id, sku, description, category, unit, show_price, image_url,
+            (quantity_on_hand - reserved) AS quantity_on_hand,
             CASE WHEN show_price THEN price::text ELSE NULL END AS price
      FROM products
      WHERE active = true
@@ -47,34 +50,7 @@ router.post('/orders', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const requestedByProduct = new Map();
-    for (const item of items) {
-      requestedByProduct.set(
-        item.product_id,
-        (requestedByProduct.get(item.product_id) || 0) + Number(item.quantity)
-      );
-    }
-
-    for (const [productId, requestedQuantity] of requestedByProduct.entries()) {
-      const stockResult = await client.query(
-        'SELECT description, quantity_on_hand FROM products WHERE id = $1 FOR UPDATE',
-        [productId]
-      );
-      const product = stockResult.rows[0];
-
-      if (Number(product.quantity_on_hand) < requestedQuantity) {
-        const err = new Error(`Insufficient stock for ${product.description}. Available: ${product.quantity_on_hand}, Requested: ${requestedQuantity}`);
-        err.status = 400;
-        throw err;
-      }
-    }
-
-    for (const [productId, requestedQuantity] of requestedByProduct.entries()) {
-      await client.query(
-        'UPDATE products SET quantity_on_hand = quantity_on_hand - $1 WHERE id = $2',
-        [requestedQuantity, productId]
-      );
-    }
+    await checkAndReserveStock(client, items);
 
     const newItemsTotal = items.reduce((sum, item) => {
       const p = productMap[item.product_id];

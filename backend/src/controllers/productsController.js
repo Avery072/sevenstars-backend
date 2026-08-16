@@ -34,10 +34,15 @@ const PRODUCT_CATEGORIES = [
 ];
 
 async function listProducts(req, res) {
+  // quantity_on_hand is exposed as available-to-sell (QB's synced count minus
+  // what's already reserved by pending orders), not the raw QB number — kept
+  // under the same field name so the mobile app's existing soldOut check
+  // (which reads this field the same way) needs no changes.
   const result = await pool.query(
-    'SELECT * FROM products WHERE active = TRUE ORDER BY category, description'
+    `SELECT *, (quantity_on_hand - reserved) AS available
+     FROM products WHERE active = TRUE ORDER BY category, description`
   );
-  res.json(result.rows);
+  res.json(result.rows.map(({ available, ...p }) => ({ ...p, quantity_on_hand: available })));
 }
 
 function formatQBError(err) {
@@ -88,7 +93,6 @@ async function createProduct(req, res) {
     show_price,
     reorder_point,
     vendor,
-    quantity_on_hand,
     inv_start_date,
   } = req.body;
 
@@ -110,9 +114,12 @@ async function createProduct(req, res) {
     return res.status(409).json({ error: `A product with ${field} already exists` });
   }
 
+  // quantity_on_hand starts at its column default (0) and is populated by the
+  // QB Item webhook once the item exists in QB — the initial physical count
+  // belongs in QB (e.g. via a PO or inventory adjustment), not typed here.
   const result = await pool.query(
-    `INSERT INTO products (sku, description, category, unit, cost, price, show_price, reorder_point, vendor, quantity_on_hand)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+    `INSERT INTO products (sku, description, category, unit, cost, price, show_price, reorder_point, vendor)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
     [
       productSku,
       description,
@@ -123,7 +130,6 @@ async function createProduct(req, res) {
       show_price ?? true,
       reorder_point,
       vendor,
-      quantity_on_hand || 0,
     ]
   );
 
@@ -174,7 +180,7 @@ async function createProduct(req, res) {
       ...fallbackPayload,
       Type: 'Inventory',
       TrackQtyOnHand: true,
-      QtyOnHand: quantity_on_hand || 0,
+      QtyOnHand: 0,
       InvStartDate: inv_start_date || new Date().toISOString().split('T')[0],
       ...accountRefs,
     };
@@ -207,8 +213,11 @@ async function updateProduct(req, res) {
   const { id } = req.params;
   const fields = req.body;
 
+  // quantity_on_hand is intentionally excluded: it's synced solely from QB
+  // (Item webhook / sync) so it can't drift from QB's real inventory count —
+  // see reservation/quantity split in ordersController.js.
   const allowed = ['sku', 'description', 'category', 'unit', 'cost', 'price',
-    'show_price', 'quantity_on_hand', 'reorder_point', 'vendor', 'active'];
+    'show_price', 'reorder_point', 'vendor', 'active'];
 
   const sets = [];
   const values = [];

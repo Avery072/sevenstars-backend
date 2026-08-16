@@ -79,11 +79,21 @@ async function getOrder(req, res) {
     `SELECT oi.*, p.sku, p.description
      FROM order_items oi
      JOIN products p ON p.id = oi.product_id
-     WHERE oi.order_id = $1`,
+     WHERE oi.order_id = $1 AND oi.status = 'active'`,
     [id]
   );
 
-  res.json({ ...orderResult.rows[0], items: itemsResult.rows });
+  // Lines QB removed stay in the DB (soft-deleted) as an audit trail — surfaced
+  // separately so the admin portal can show them struck-through if useful.
+  const removedResult = await pool.query(
+    `SELECT oi.*, p.sku, p.description
+     FROM order_items oi
+     JOIN products p ON p.id = oi.product_id
+     WHERE oi.order_id = $1 AND oi.status = 'removed'`,
+    [id]
+  );
+
+  res.json({ ...orderResult.rows[0], items: itemsResult.rows, removed_items: removedResult.rows });
 }
 
 async function createOrder(req, res) {
@@ -111,34 +121,7 @@ async function createOrder(req, res) {
   try {
     await client.query('BEGIN');
 
-    const requestedByProduct = new Map();
-    for (const item of items) {
-      requestedByProduct.set(
-        item.product_id,
-        (requestedByProduct.get(item.product_id) || 0) + Number(item.quantity)
-      );
-    }
-
-    for (const [productId, requestedQuantity] of requestedByProduct.entries()) {
-      const stockResult = await client.query(
-        'SELECT description, quantity_on_hand FROM products WHERE id = $1 FOR UPDATE',
-        [productId]
-      );
-      const product = stockResult.rows[0];
-
-      if (Number(product.quantity_on_hand) < requestedQuantity) {
-        const err = new Error(`Insufficient stock for ${product.description}. Available: ${product.quantity_on_hand}, Requested: ${requestedQuantity}`);
-        err.status = 400;
-        throw err;
-      }
-    }
-
-    for (const [productId, requestedQuantity] of requestedByProduct.entries()) {
-      await client.query(
-        'UPDATE products SET quantity_on_hand = quantity_on_hand - $1 WHERE id = $2',
-        [requestedQuantity, productId]
-      );
-    }
+    await checkAndReserveStock(client, items);
 
     const newItemsTotal = items.reduce((sum, item) => {
       const p = productMap[item.product_id];
@@ -177,7 +160,14 @@ async function createOrder(req, res) {
 
     await client.query('COMMIT');
 
-    // Push to QuickBooks async — don't block the response
+    // Push to QuickBooks async — don't block the response. The order is real
+    // and committed regardless of whether this succeeds: the stock reservation
+    // above stays held (not rolled back on failure) since the customer's order
+    // is genuine and the goods are spoken for — only the QB *sync* failed, not
+    // the order. pushToQB itself records the failure for visibility and
+    // releases the reservation once a real invoice exists in QB. The order
+    // stays pending (qb_invoice_id NULL) and can be retried via "SYNC PENDING
+    // TO QB" / the discrepancy check.
     pushToQB(order, items).catch(err => {
       const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
       console.error(`QB invoice push failed for order ${order.id}:`, detail);
@@ -195,7 +185,91 @@ async function createOrder(req, res) {
   }
 }
 
+// Checks stock and claims it for an order, all under row locks in the caller's
+// transaction. products.reserved is the app's own column — quantity_on_hand is
+// synced solely from QB (see qbEntitySync.js) so the two never race on the
+// same value; available-to-sell is quantity_on_hand - reserved. Shared by
+// createOrder (below) and the mobile order-placement route.
+async function checkAndReserveStock(client, items) {
+  const requestedByProduct = new Map();
+  for (const item of items) {
+    requestedByProduct.set(
+      item.product_id,
+      (requestedByProduct.get(item.product_id) || 0) + Number(item.quantity)
+    );
+  }
+
+  for (const [productId, requestedQuantity] of requestedByProduct.entries()) {
+    const stockResult = await client.query(
+      'SELECT description, quantity_on_hand, reserved FROM products WHERE id = $1 FOR UPDATE',
+      [productId]
+    );
+    const product = stockResult.rows[0];
+    const available = Number(product.quantity_on_hand) - Number(product.reserved);
+
+    if (available < requestedQuantity) {
+      const err = new Error(`Insufficient stock for ${product.description}. Available: ${available}, Requested: ${requestedQuantity}`);
+      err.status = 400;
+      throw err;
+    }
+  }
+
+  for (const [productId, requestedQuantity] of requestedByProduct.entries()) {
+    await client.query('UPDATE products SET reserved = reserved + $1 WHERE id = $2', [requestedQuantity, productId]);
+  }
+}
+
+// Releases an order's reservation (once its invoice is confirmed in QB, or
+// when the order is deleted before that ever happens). Guarded by
+// reservation_released_at so it's safe to call more than once — QB's own
+// quantity_on_hand has already reflected the sale by the time an invoice
+// exists, so releasing here (rather than waiting for the Item webhook) avoids
+// double-counting against a webhook that hasn't arrived yet.
+async function releaseReservation(dbClient, orderId) {
+  const orderResult = await dbClient.query('SELECT reservation_released_at FROM orders WHERE id = $1', [orderId]);
+  if (!orderResult.rows.length || orderResult.rows[0].reservation_released_at) return;
+
+  const items = await dbClient.query(
+    `SELECT product_id, quantity FROM order_items WHERE order_id = $1 AND status = 'active'`,
+    [orderId]
+  );
+  const byProduct = new Map();
+  for (const item of items.rows) {
+    byProduct.set(item.product_id, (byProduct.get(item.product_id) || 0) + Number(item.quantity));
+  }
+  for (const [productId, qty] of byProduct.entries()) {
+    await dbClient.query('UPDATE products SET reserved = reserved - $1 WHERE id = $2', [qty, productId]);
+  }
+  await dbClient.query('UPDATE orders SET reservation_released_at = NOW() WHERE id = $1', [orderId]);
+}
+
+// Visibility for stuck pushes — the admin portal flags orders pending past a
+// threshold with attempts > 0 as "stuck", distinct from orders merely waiting
+// on their first (near-instant) push attempt.
+async function recordPushFailure(orderId, err) {
+  const detail = (err.response?.data ? JSON.stringify(err.response.data) : err.message || String(err)).slice(0, 2000);
+  await pool.query(
+    `UPDATE orders SET push_attempts = push_attempts + 1, last_push_error = $1, last_push_attempt_at = NOW() WHERE id = $2`,
+    [detail, orderId]
+  );
+}
+
+// Thin wrapper so every caller (createOrder, the mobile order route,
+// syncPendingInvoices, reconcileOrders) gets the same failure-visibility and
+// reservation-release behavior without duplicating it at each call site.
 async function pushToQB(order, items) {
+  try {
+    await pushToQBInner(order, items);
+    await releaseReservation(pool, order.id);
+  } catch (err) {
+    await recordPushFailure(order.id, err).catch(recErr =>
+      console.error(`Order ${order.id}: failed to record push failure:`, recErr.message)
+    );
+    throw err;
+  }
+}
+
+async function pushToQBInner(order, items) {
   const custResult = await pool.query(
     `SELECT c.qb_customer_id, c.company_name, c.first_name, c.last_name, c.phone,
             COALESCE(c.email, mu.email) AS email
@@ -283,12 +357,13 @@ async function pushToQB(order, items) {
     [order.customer_id, order.delivery_date]
   );
 
-  let invoiceId, docNumber;
+  let invoiceId, docNumber, respInvoice;
   if (existing.rows.length) {
     try {
       const updated = await appendToQBInvoice(existing.rows[0].qb_invoice_id, lines);
       invoiceId = updated.Id;
       docNumber = updated.DocNumber;
+      respInvoice = updated;
       console.log(`QB invoice #${docNumber} (id ${invoiceId}) updated — merged order ${order.id} into existing invoice`);
     } catch (appendErr) {
       console.warn(`QB invoice ${existing.rows[0].qb_invoice_id} unreachable (deleted/voided in QB), creating new invoice. Error: ${appendErr.message}`);
@@ -302,6 +377,7 @@ async function pushToQB(order, items) {
       const invoice = await createQBInvoiceWithDocNumber(payload);
       invoiceId = invoice.Id;
       docNumber = invoice.DocNumber;
+      respInvoice = invoice;
       console.log(`QB invoice #${docNumber} (id ${invoiceId}) created (fallback) for order ${order.id}`);
     }
   } else {
@@ -314,10 +390,26 @@ async function pushToQB(order, items) {
     const invoice = await createQBInvoiceWithDocNumber(payload);
     invoiceId = invoice.Id;
     docNumber = invoice.DocNumber;
+    respInvoice = invoice;
     console.log(`QB invoice #${docNumber} (id ${invoiceId}) created for order ${order.id}`);
   }
 
   await pool.query('UPDATE orders SET qb_invoice_id = $1, qb_doc_number = $2 WHERE id = $3', [invoiceId, docNumber, order.id]);
+
+  // Backfill qb_line_id on the order_items this call just pushed, so future QB
+  // edits to these specific lines can be reconciled by line id instead of guessing
+  // by product_id (which breaks if a product appears as two separate lines, or a
+  // line's item gets swapped in QB). For a plain create, every response line is
+  // new; for an append, the newly-added lines are the last `lines.length` entries.
+  const respLines = (respInvoice.Line || []).filter(l => l.DetailType === 'SalesItemLineDetail');
+  const newLines = respLines.slice(-lines.length);
+  const { rows: unbackfilled } = await pool.query(
+    `SELECT id FROM order_items WHERE order_id = $1 AND qb_line_id IS NULL ORDER BY id ASC`,
+    [order.id]
+  );
+  for (let i = 0; i < unbackfilled.length && i < newLines.length; i++) {
+    await pool.query('UPDATE order_items SET qb_line_id = $1 WHERE id = $2', [newLines[i].Id, unbackfilled[i].id]);
+  }
 }
 
 async function deleteOrder(req, res) {
@@ -335,27 +427,11 @@ async function deleteOrder(req, res) {
     }
     qb_invoice_id = lookup.rows[0].qb_invoice_id;
 
-    const items = await client.query(
-      'SELECT product_id, quantity FROM order_items WHERE order_id = $1',
-      [id]
-    );
-
-    for (const item of items.rows) {
-      try {
-        await client.query('SAVEPOINT restore_inventory');
-        const restoreResult = await client.query(
-          'UPDATE products SET quantity_on_hand = quantity_on_hand + $1 WHERE id = $2',
-          [item.quantity, item.product_id]
-        );
-        if (!restoreResult.rowCount) {
-          throw new Error('Product not found');
-        }
-        await client.query('RELEASE SAVEPOINT restore_inventory');
-      } catch (err) {
-        await client.query('ROLLBACK TO SAVEPOINT restore_inventory');
-        console.error(`Failed to restore inventory for order ${id}, product ${item.product_id}:`, err.message);
-      }
-    }
+    // Releases the reservation if the order's push to QB never succeeded (a
+    // no-op if it already did — QB's own quantity_on_hand already reflects the
+    // sale by then, and deleteQBInvoice below tells QB about the cancellation,
+    // which flows back through the Item webhook as usual).
+    await releaseReservation(client, id);
 
     await client.query('DELETE FROM orders WHERE id = $1', [id]);
     await client.query('COMMIT');
@@ -391,7 +467,7 @@ async function getPackingReport(req, res) {
      JOIN order_items oi ON oi.order_id = o.id
      JOIN products p ON p.id = oi.product_id
      JOIN customers c ON c.id = o.customer_id
-     WHERE o.delivery_date = COALESCE($1::date, CURRENT_DATE)
+     WHERE o.delivery_date = COALESCE($1::date, CURRENT_DATE) AND oi.status = 'active'
      GROUP BY p.id, p.sku, p.description, oi.unit, c.id, c.company_name
      ORDER BY p.description ASC, c.company_name ASC`,
     [date]
@@ -449,7 +525,7 @@ async function getSalmonPullReport(req, res) {
      JOIN products p ON p.id = oi.product_id
      JOIN customers c ON c.id = o.customer_id
      WHERE o.delivery_date = COALESCE($1::date, CURRENT_DATE)
-       AND p.description ILIKE '%salmon%'
+       AND p.description ILIKE '%salmon%' AND oi.status = 'active'
      GROUP BY p.id, p.sku, p.description, c.company_name, oi.unit,
               c.salmon_cut, c.skin_off, c.scale, c.pbo, c.hg
      ORDER BY p.description ASC, c.company_name ASC`,
@@ -500,7 +576,7 @@ async function syncPendingInvoices(req, res) {
     `SELECT o.*, oi.product_id, oi.quantity, oi.unit, oi.unit_price, oi.notes AS item_notes
      FROM orders o
      JOIN order_items oi ON oi.order_id = o.id
-     WHERE o.qb_invoice_id IS NULL
+     WHERE o.qb_invoice_id IS NULL AND oi.status = 'active'
      ORDER BY o.id`
   );
 
@@ -549,4 +625,4 @@ async function purgeOldOrders() {
   }
 }
 
-module.exports = { listOrders, getOrder, createOrder, deleteOrder, getPackingReport, getSalmonPullReport, syncPendingInvoices, purgeOldOrders, pushToQB };
+module.exports = { listOrders, getOrder, createOrder, deleteOrder, getPackingReport, getSalmonPullReport, syncPendingInvoices, purgeOldOrders, pushToQB, checkAndReserveStock };
