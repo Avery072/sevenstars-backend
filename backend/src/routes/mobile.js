@@ -4,11 +4,12 @@ const { requireCustomerAuth } = require('../middleware/auth');
 const pool = require('../config/db');
 const { pushToQB, checkAndReserveStock } = require('../controllers/ordersController');
 
-router.use(requireCustomerAuth);
-
-// GET /api/mobile/products — active products; price hidden when show_price = false.
-// quantity_on_hand here is available-to-order (QB's synced count minus what's
-// already reserved by pending orders), not the raw QB number.
+// GET /api/mobile/products — public (no login required): App Store/Play Store
+// review requires letting users browse the catalog before creating an account.
+// Everything else below still requires requireCustomerAuth, applied per-route.
+// Active products; price hidden when show_price = false. quantity_on_hand here
+// is available-to-order (QB's synced count minus what's already reserved by
+// pending orders), not the raw QB number.
 router.get('/products', async (req, res) => {
   const result = await pool.query(
     `SELECT id, sku, description, category, unit, show_price, image_url,
@@ -22,7 +23,7 @@ router.get('/products', async (req, res) => {
 });
 
 // POST /api/mobile/orders — create order; prices always from DB, never client-sent
-router.post('/orders', async (req, res) => {
+router.post('/orders', requireCustomerAuth, async (req, res) => {
   const { delivery_date, notes, items } = req.body;
   const customer_id = req.user.customer_id;
 
@@ -105,7 +106,7 @@ router.post('/orders', async (req, res) => {
 });
 
 // PATCH /api/mobile/salmon-prefs — one-time set at signup; rejected if already saved
-router.patch('/salmon-prefs', async (req, res) => {
+router.patch('/salmon-prefs', requireCustomerAuth, async (req, res) => {
   const { salmon_cut, skin_off, scale, pbo, hg } = req.body;
   const { customer_id } = req.user;
 
@@ -132,7 +133,7 @@ router.patch('/salmon-prefs', async (req, res) => {
 
 // GET /api/mobile/quiz-status — should the app show the salmon-cut quiz?
 // Completed if this user finished it OR the company already has a preference set.
-router.get('/quiz-status', async (req, res) => {
+router.get('/quiz-status', requireCustomerAuth, async (req, res) => {
   const result = await pool.query(
     `SELECT (mu.quiz_completed OR c.salmon_cut IS NOT NULL) AS quiz_completed
      FROM mobile_users mu
@@ -145,7 +146,7 @@ router.get('/quiz-status', async (req, res) => {
 
 // POST /api/mobile/quiz-complete — mark the quiz done without changing company prefs
 // (e.g. a main user of an already-configured company acknowledging/skipping the quiz).
-router.post('/quiz-complete', async (req, res) => {
+router.post('/quiz-complete', requireCustomerAuth, async (req, res) => {
   await pool.query('UPDATE mobile_users SET quiz_completed = TRUE WHERE id = $1', [req.user.user_id]);
   res.json({ quiz_completed: true });
 });
@@ -158,7 +159,7 @@ function requireMainUser(req, res, next) {
 }
 
 // GET /api/mobile/pending-users — pending sub-accounts awaiting main user approval
-router.get('/pending-users', requireMainUser, async (req, res) => {
+router.get('/pending-users', requireCustomerAuth, requireMainUser, async (req, res) => {
   const result = await pool.query(
     `SELECT id, name, email, created_at
      FROM mobile_users
@@ -170,7 +171,7 @@ router.get('/pending-users', requireMainUser, async (req, res) => {
 });
 
 // POST /api/mobile/approve-user/:id
-router.post('/approve-user/:id', requireMainUser, async (req, res) => {
+router.post('/approve-user/:id', requireCustomerAuth, requireMainUser, async (req, res) => {
   const result = await pool.query(
     `UPDATE mobile_users SET active = TRUE
      WHERE id = $1 AND customer_id = $2 AND is_main = FALSE
@@ -182,7 +183,7 @@ router.post('/approve-user/:id', requireMainUser, async (req, res) => {
 });
 
 // POST /api/mobile/reject-user/:id
-router.post('/reject-user/:id', requireMainUser, async (req, res) => {
+router.post('/reject-user/:id', requireCustomerAuth, requireMainUser, async (req, res) => {
   const result = await pool.query(
     `DELETE FROM mobile_users
      WHERE id = $1 AND customer_id = $2 AND is_main = FALSE AND active = FALSE
