@@ -1059,7 +1059,11 @@ function renderOrderDetailHTML(order) {
   const statusBanner = isVoided
     ? `<div style="background:#e8e8e8;border:1px solid #bbb;padding:8px 10px;margin-bottom:12px;font-size:11px;font-weight:bold;color:#555;">VOIDED IN QUICKBOOKS — This invoice was deleted from QB.</div>`
     : isModified && origTotal && origTotal !== curTotal
-    ? `<div style="background:#fffbe6;border:1px solid #d4a800;padding:8px 10px;margin-bottom:12px;font-size:11px;"><strong>MODIFIED IN QUICKBOOKS</strong> — Original total: <span style="text-decoration:line-through;">$${origTotal}</span> → Current: <strong>$${curTotal}</strong></div>`
+    // "modified" no longer means "changed in QuickBooks" specifically —
+    // applyOrderEdit sets the same status for an admin/mobile edit made
+    // right here in our own system, so the banner can't claim a source it
+    // doesn't actually know. Stays true either way.
+    ? `<div style="background:#fffbe6;border:1px solid #d4a800;padding:8px 10px;margin-bottom:12px;font-size:11px;"><strong>MODIFIED</strong> — Original total: <span style="text-decoration:line-through;">$${origTotal}</span> → Current: <strong>$${curTotal}</strong></div>`
     : '';
   return `
     ${statusBanner}
