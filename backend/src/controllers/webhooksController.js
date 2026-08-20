@@ -159,6 +159,16 @@ async function reconcileExistingOrder(order, invoice) {
   const totalChanged = Math.abs(qbTotal - parseFloat(order.total || 0)) > 0.005;
   const anyChange = updates.length > 0 || removals.length > 0 || insertions.length > 0 || totalChanged;
 
+  // Nothing to do — skip the write entirely (not just a no-op UPDATE) and
+  // report it honestly as unchanged. Previously this returned status:
+  // 'updated' unconditionally, so a sync/reconcile run counted every
+  // existing invoice it looked at as "updated" even when nothing differed —
+  // the reported count was really just "how many invoices existed in this
+  // window," not "how many actually changed."
+  if (!anyChange) {
+    return { status: 'unchanged', linesAdded: 0, linesRemoved: 0, linesChanged: 0 };
+  }
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -178,8 +188,7 @@ async function reconcileExistingOrder(order, invoice) {
         [order.id, ins.product_id, ins.quantity, ins.unit, ins.unit_price, ins.notes, ins.qb_line_id]
       );
     }
-    const nextStatus = anyChange ? 'modified' : order.status;
-    await client.query('UPDATE orders SET total = $1, status = $2 WHERE id = $3', [qbTotal, nextStatus, order.id]);
+    await client.query(`UPDATE orders SET total = $1, status = 'modified' WHERE id = $2`, [qbTotal, order.id]);
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
@@ -188,9 +197,7 @@ async function reconcileExistingOrder(order, invoice) {
     client.release();
   }
 
-  if (updates.length || removals.length || insertions.length) {
-    console.log(`QB invoice ${invoice.Id} → order ${order.id} reconciled (+${insertions.length} -${removals.length} ~${updates.length})`);
-  }
+  console.log(`QB invoice ${invoice.Id} → order ${order.id} reconciled (+${insertions.length} -${removals.length} ~${updates.length})`);
 
   return { status: 'updated', linesAdded: insertions.length, linesRemoved: removals.length, linesChanged: updates.length };
 }

@@ -112,12 +112,14 @@ async function syncInvoicesFromQB(req, res) {
     throw err;
   }
 
-  let created = 0, updated = 0, skipped = 0;
+  let created = 0, updated = 0, unchanged = 0, voided = 0, skipped = 0;
   for (const inv of invoices) {
     try {
       const result = await processInvoice(inv);
       if (result.status === 'created') created++;
-      else if (result.status === 'updated' || result.status === 'voided') updated++;
+      else if (result.status === 'updated') updated++;
+      else if (result.status === 'unchanged') unchanged++;
+      else if (result.status === 'voided') voided++;
       else skipped++;
     } catch (err) {
       console.error(`Failed to sync QB invoice ${inv.Id}:`, err.message);
@@ -125,7 +127,7 @@ async function syncInvoicesFromQB(req, res) {
     }
   }
 
-  res.json({ message: 'Invoice sync complete', date: sinceStr, total: invoices.length, created, updated, skipped });
+  res.json({ message: 'Invoice sync complete', date: sinceStr, total: invoices.length, created, updated, unchanged, voided, skipped });
 }
 
 // Fetches all QB invoices with TxnDate in [from, to], paginated.
@@ -208,13 +210,14 @@ async function runReconciliation(from, to) {
     throw err;
   }
 
-  let pulled = 0, updated = 0, voided = 0, skipped = 0;
+  let pulled = 0, updated = 0, unchanged = 0, voided = 0, skipped = 0;
   let linesAdded = 0, linesRemoved = 0, linesChanged = 0;
   for (const inv of invoices) {
     try {
       const result = await processInvoice(inv);
       if (result.status === 'created') pulled++;
       else if (result.status === 'updated') updated++;
+      else if (result.status === 'unchanged') unchanged++;
       else if (result.status === 'voided') voided++;
       else skipped++;
       linesAdded += result.linesAdded || 0;
@@ -232,7 +235,7 @@ async function runReconciliation(from, to) {
     pushed, pushFailed,
     editRetried, editRetryFailed,
     checked: invoices.length,
-    pulled, updated, voided, skipped,
+    pulled, updated, unchanged, voided, skipped,
     linesAdded, linesRemoved, linesChanged,
   };
 }

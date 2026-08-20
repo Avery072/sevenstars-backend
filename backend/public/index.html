@@ -856,7 +856,7 @@ async function doSyncInvoices(days) {
   btn.disabled = false;
   btn.textContent = '↓ PULL INVOICES FROM QB';
   if (res) {
-    alert(`Invoice sync complete — ${res.created} new orders created, ${res.updated} updated, ${res.skipped} skipped.`);
+    alert(`Invoice sync complete — ${res.created} new orders created, ${res.updated} updated, ${res.unchanged} unchanged, ${res.voided} voided, ${res.skipped} skipped.`);
     await refreshOrdersAfterMutation();
   }
 }
@@ -889,7 +889,7 @@ async function checkDiscrepancies() {
   if (res) {
     alert(
       `Checked ${res.checked} QB invoice(s) — ${res.pushed} pushed to QB, ${res.pulled} pulled from QB, ` +
-      `${res.updated} updated, ${res.voided} voided.\n` +
+      `${res.updated} updated, ${res.unchanged} unchanged, ${res.voided} voided.\n` +
       `Lines: +${res.linesAdded} added, -${res.linesRemoved} removed, ~${res.linesChanged} changed.` +
       (res.pushFailed ? `\n${res.pushFailed} push(es) failed — see server logs.` : '')
     );
