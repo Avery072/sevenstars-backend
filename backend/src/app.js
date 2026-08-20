@@ -94,9 +94,9 @@ function runAutoReconcile() {
         console.error(`Auto-reconcile (${from} to ${to}) failed:`, result.error);
         return;
       }
-      const { pushed, pulled, updated, voided, linesAdded, linesRemoved, linesChanged } = result;
-      if (pushed || pulled || updated || voided || linesAdded || linesRemoved || linesChanged) {
-        console.log(`Auto-reconcile (${from} to ${to}): ${pushed} pushed, ${pulled} pulled, ${updated} updated, ${voided} voided, lines +${linesAdded}/-${linesRemoved}/~${linesChanged}`);
+      const { pushed, pulled, updated, voided, linesAdded, linesRemoved, linesChanged, editRetried, editRetryFailed } = result;
+      if (pushed || pulled || updated || voided || linesAdded || linesRemoved || linesChanged || editRetried || editRetryFailed) {
+        console.log(`Auto-reconcile (${from} to ${to}): ${pushed} pushed, ${pulled} pulled, ${updated} updated, ${voided} voided, lines +${linesAdded}/-${linesRemoved}/~${linesChanged}, edit-pushes retried ${editRetried} ok / ${editRetryFailed} still failing`);
       }
     })
     .catch(err => console.error(`Auto-reconcile (${from} to ${to}) threw:`, err.message));

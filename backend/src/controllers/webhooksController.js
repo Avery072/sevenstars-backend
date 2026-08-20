@@ -74,84 +74,112 @@ function isVoided(invoice) {
 }
 
 // Reconciles an existing local order's line items against a freshly-fetched QB
-// invoice. QB is ground truth for line composition/qty/price: lines it no longer
-// has are soft-removed (status='removed', kept for audit trail), lines it has
-// that we don't are inserted, and matched lines (by qb_line_id) get their
-// product/qty/price updated in place. Matching is keyed on qb_line_id rather
-// than product_id because a product can appear as two separate lines, or a
-// line's item can be swapped entirely.
+// invoice. QB is ground truth for line composition/qty/price for every order
+// regardless of source — including mobile/admin-origin ones: fish is ordered
+// by count through the app but the final weight (and price) only gets
+// determined and entered in QB after physical fulfillment, so a QB-side
+// correction on an in-system order is routine, not a policy violation. Lines
+// QB no longer has are soft-removed (status='removed', kept for audit
+// trail), lines it has that we don't are inserted, and matched lines (by
+// qb_line_id) get their product/qty/price updated in place. Matching is
+// keyed on qb_line_id rather than product_id because a product can appear as
+// two separate lines, or a line's item can be swapped entirely.
 async function reconcileExistingOrder(order, invoice) {
+  // An edit push (applyOrderEdit -> pushOrderEditToQB) is actively in
+  // flight for this order — skip reconciling it this pass rather than risk
+  // fetching QB's pre-push state and undoing the edit that's about to land.
+  // The push completes in seconds; this order gets picked up again on the
+  // next reconciliation pass (webhook retry or the 20-min sweep) once it
+  // clears, so skipping here loses nothing, just defers it briefly.
+  if (order.push_in_progress) {
+    return { status: 'skipped', linesAdded: 0, linesRemoved: 0, linesChanged: 0 };
+  }
+
   const qbLines = (invoice.Line || []).filter(l => l.DetailType === 'SalesItemLineDetail');
   const qbByLineId = new Map(qbLines.filter(l => l.Id != null).map(l => [l.Id, l]));
 
+  const localItems = await pool.query(
+    `SELECT id, qb_line_id, product_id, quantity, unit_price
+     FROM order_items WHERE order_id = $1 AND status = 'active'`,
+    [order.id]
+  );
+
+  // Plan phase — figure out what would change, without writing anything yet.
+  const removals = [];
+  const updates = [];
+  const insertions = [];
+
+  for (const item of localItems.rows) {
+    if (!item.qb_line_id) continue; // legacy row never backfilled with a QB line id — leave alone
+
+    const line = qbByLineId.get(item.qb_line_id);
+    if (!line) {
+      removals.push(item.id);
+      continue;
+    }
+    qbByLineId.delete(item.qb_line_id); // mark matched
+
+    const qbItemId = line.SalesItemLineDetail?.ItemRef?.value;
+    const prodResult = await pool.query('SELECT id, unit FROM products WHERE qb_item_id = $1', [qbItemId]);
+    if (!prodResult.rows.length) continue; // unknown item — same skip as the create path
+
+    const product = prodResult.rows[0];
+    const newQty = parseFloat(line.SalesItemLineDetail?.Qty || 0);
+    const newPrice = parseFloat(line.SalesItemLineDetail?.UnitPrice || 0);
+    const changed = product.id !== item.product_id
+      || Math.abs(newQty - parseFloat(item.quantity)) > 0.0001
+      || Math.abs(newPrice - parseFloat(item.unit_price)) > 0.0001;
+
+    if (changed) {
+      updates.push({ id: item.id, product_id: product.id, unit: product.unit, quantity: newQty, unit_price: newPrice });
+    }
+  }
+
+  // Whatever's left in qbByLineId are lines QB has that we don't — added directly in QB.
+  for (const line of qbByLineId.values()) {
+    const qbItemId = line.SalesItemLineDetail?.ItemRef?.value;
+    if (!qbItemId) continue;
+    const prodResult = await pool.query('SELECT id, unit FROM products WHERE qb_item_id = $1', [qbItemId]);
+    if (!prodResult.rows.length) {
+      console.warn(`QB invoice ${invoice.Id}: new line references unknown item ${qbItemId} — skipping`);
+      continue;
+    }
+    const product = prodResult.rows[0];
+    insertions.push({
+      product_id: product.id,
+      unit: product.unit,
+      quantity: parseFloat(line.SalesItemLineDetail?.Qty || 0),
+      unit_price: parseFloat(line.SalesItemLineDetail?.UnitPrice || 0),
+      notes: line.Description || null,
+      qb_line_id: line.Id || null,
+    });
+  }
+
+  const qbTotal = parseFloat(invoice.TotalAmt || 0);
+  const totalChanged = Math.abs(qbTotal - parseFloat(order.total || 0)) > 0.005;
+  const anyChange = updates.length > 0 || removals.length > 0 || insertions.length > 0 || totalChanged;
+
   const client = await pool.connect();
-  let linesAdded = 0, linesRemoved = 0, linesChanged = 0;
   try {
     await client.query('BEGIN');
-
-    const localItems = await client.query(
-      `SELECT id, qb_line_id, product_id, quantity, unit_price
-       FROM order_items WHERE order_id = $1 AND status = 'active'`,
-      [order.id]
-    );
-
-    for (const item of localItems.rows) {
-      if (!item.qb_line_id) continue; // legacy row never backfilled with a QB line id — leave alone
-
-      const line = qbByLineId.get(item.qb_line_id);
-      if (!line) {
-        await client.query(`UPDATE order_items SET status = 'removed' WHERE id = $1`, [item.id]);
-        linesRemoved++;
-        continue;
-      }
-      qbByLineId.delete(item.qb_line_id); // mark matched
-
-      const qbItemId = line.SalesItemLineDetail?.ItemRef?.value;
-      const prodResult = await client.query('SELECT id, unit FROM products WHERE qb_item_id = $1', [qbItemId]);
-      if (!prodResult.rows.length) continue; // unknown item — same skip as the create path
-
-      const product = prodResult.rows[0];
-      const newQty = parseFloat(line.SalesItemLineDetail?.Qty || 0);
-      const newPrice = parseFloat(line.SalesItemLineDetail?.UnitPrice || 0);
-      const changed = product.id !== item.product_id
-        || Math.abs(newQty - parseFloat(item.quantity)) > 0.0001
-        || Math.abs(newPrice - parseFloat(item.unit_price)) > 0.0001;
-
-      if (changed) {
-        await client.query(
-          `UPDATE order_items SET product_id = $1, unit = $2, quantity = $3, unit_price = $4 WHERE id = $5`,
-          [product.id, product.unit, newQty, newPrice, item.id]
-        );
-        linesChanged++;
-      }
+    for (const id of removals) {
+      await client.query(`UPDATE order_items SET status = 'removed' WHERE id = $1`, [id]);
     }
-
-    // Whatever's left in qbByLineId are lines QB has that we don't — added directly in QB.
-    for (const line of qbByLineId.values()) {
-      const qbItemId = line.SalesItemLineDetail?.ItemRef?.value;
-      if (!qbItemId) continue;
-      const prodResult = await client.query('SELECT id, unit FROM products WHERE qb_item_id = $1', [qbItemId]);
-      if (!prodResult.rows.length) {
-        console.warn(`QB invoice ${invoice.Id}: new line references unknown item ${qbItemId} — skipping`);
-        continue;
-      }
-      const product = prodResult.rows[0];
-      const qty = parseFloat(line.SalesItemLineDetail?.Qty || 0);
-      const unitPrice = parseFloat(line.SalesItemLineDetail?.UnitPrice || 0);
+    for (const u of updates) {
+      await client.query(
+        `UPDATE order_items SET product_id = $1, unit = $2, quantity = $3, unit_price = $4 WHERE id = $5`,
+        [u.product_id, u.unit, u.quantity, u.unit_price, u.id]
+      );
+    }
+    for (const ins of insertions) {
       await client.query(
         `INSERT INTO order_items (order_id, product_id, quantity, unit, unit_price, notes, qb_line_id, status)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 'active')`,
-        [order.id, product.id, qty, product.unit, unitPrice, line.Description || null, line.Id || null]
+        [order.id, ins.product_id, ins.quantity, ins.unit, ins.unit_price, ins.notes, ins.qb_line_id]
       );
-      linesAdded++;
     }
-
-    const qbTotal = parseFloat(invoice.TotalAmt || 0);
-    const totalChanged = Math.abs(qbTotal - parseFloat(order.total || 0)) > 0.005;
-    const anyChange = linesAdded > 0 || linesRemoved > 0 || linesChanged > 0 || totalChanged;
     const nextStatus = anyChange ? 'modified' : order.status;
     await client.query('UPDATE orders SET total = $1, status = $2 WHERE id = $3', [qbTotal, nextStatus, order.id]);
-
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
@@ -160,11 +188,11 @@ async function reconcileExistingOrder(order, invoice) {
     client.release();
   }
 
-  if (linesAdded || linesRemoved || linesChanged) {
-    console.log(`QB invoice ${invoice.Id} → order ${order.id} reconciled (+${linesAdded} -${linesRemoved} ~${linesChanged})`);
+  if (updates.length || removals.length || insertions.length) {
+    console.log(`QB invoice ${invoice.Id} → order ${order.id} reconciled (+${insertions.length} -${removals.length} ~${updates.length})`);
   }
 
-  return { status: 'updated', linesAdded, linesRemoved, linesChanged };
+  return { status: 'updated', linesAdded: insertions.length, linesRemoved: removals.length, linesChanged: updates.length };
 }
 
 // processInvoice handles a full QB Invoice object — used by the webhook, the bulk
@@ -184,7 +212,12 @@ async function processInvoice(invoice) {
   }
 
   // If we already have an order with this invoice ID — reconcile line items and total.
-  const existing = await pool.query('SELECT id, total, status FROM orders WHERE qb_invoice_id = $1 LIMIT 1', [qbInvoiceId]);
+  const existing = await pool.query(
+    `SELECT id, total, status, source,
+            (qb_push_in_progress_at IS NOT NULL AND qb_push_in_progress_at > NOW() - INTERVAL '2 minutes') AS push_in_progress
+     FROM orders WHERE qb_invoice_id = $1 LIMIT 1`,
+    [qbInvoiceId]
+  );
   if (existing.rows.length) {
     return reconcileExistingOrder(existing.rows[0], invoice);
   }
@@ -232,8 +265,8 @@ async function processInvoice(invoice) {
     await client.query('BEGIN');
 
     const orderResult = await client.query(
-      `INSERT INTO orders (qb_invoice_id, qb_doc_number, customer_id, delivery_date, notes, total)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      `INSERT INTO orders (qb_invoice_id, qb_doc_number, customer_id, delivery_date, notes, total, source)
+       VALUES ($1, $2, $3, $4, $5, $6, 'qb') RETURNING id`,
       [qbInvoiceId, invoice.DocNumber || null, customerId, deliveryDate, notes, total]
     );
     const orderId = orderResult.rows[0].id;

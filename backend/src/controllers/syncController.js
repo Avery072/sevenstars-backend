@@ -3,7 +3,7 @@ const { queryQBAll } = require('../middleware/qbSync');
 const { processInvoice } = require('./webhooksController');
 const { getQBClient } = require('../middleware/qbSync');
 const { upsertQBItem, upsertQBCustomer } = require('../services/qbEntitySync');
-const { pushToQB } = require('./ordersController');
+const { pushToQB, retryOrderEditPush } = require('./ordersController');
 
 async function syncFromQB(req, res) {
   let items, customers;
@@ -175,18 +175,27 @@ async function runReconciliation(from, to) {
     [from, to]
   );
   for (const order of pendingOrders) {
-    const { rows: items } = await pool.query(
-      `SELECT * FROM order_items WHERE order_id = $1 AND status = 'active'`,
-      [order.id]
-    );
     try {
-      await pushToQB(order, items);
+      await pushToQB(order);
       pushed++;
     } catch (err) {
       const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
       console.error(`Reconcile: push failed for order ${order.id}:`, detail);
       pushFailed++;
     }
+  }
+
+  // applyOrderEdit pushes edits to QB synchronously, but doesn't roll back
+  // the local edit if that push fails (the edit is real either way — see its
+  // own comment). This is the automatic retry that closes the gap instead of
+  // leaving a failed edit-sync stuck until someone manually re-saves it.
+  let editRetried = 0, editRetryFailed = 0;
+  const { rows: failedEdits } = await pool.query(
+    `SELECT id FROM orders WHERE delivery_date BETWEEN $1 AND $2 AND qb_invoice_id IS NOT NULL AND push_attempts > 0`,
+    [from, to]
+  );
+  for (const { id } of failedEdits) {
+    if (await retryOrderEditPush(id)) editRetried++; else editRetryFailed++;
   }
 
   let invoices;
@@ -221,6 +230,7 @@ async function runReconciliation(from, to) {
     message: 'Reconciliation complete',
     from, to,
     pushed, pushFailed,
+    editRetried, editRetryFailed,
     checked: invoices.length,
     pulled, updated, voided, skipped,
     linesAdded, linesRemoved, linesChanged,

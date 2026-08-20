@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { requireCustomerAuth } = require('../middleware/auth');
 const pool = require('../config/db');
-const { pushToQB, checkAndReserveStock } = require('../controllers/ordersController');
+const { pushToQB, checkAndReserveStock, applyOrderEdit } = require('../controllers/ordersController');
 
 // GET /api/mobile/products — public (no login required): App Store/Play Store
 // review requires letting users browse the catalog before creating an account.
@@ -13,7 +13,8 @@ const { pushToQB, checkAndReserveStock } = require('../controllers/ordersControl
 router.get('/products', async (req, res) => {
   const result = await pool.query(
     `SELECT id, sku, description, category, unit, show_price, image_url,
-            (quantity_on_hand - reserved) AS quantity_on_hand,
+            CASE WHEN available_override THEN GREATEST(quantity_on_hand - reserved, 1)
+                 ELSE quantity_on_hand - reserved END AS quantity_on_hand,
             CASE WHEN show_price THEN price::text ELSE NULL END AS price
      FROM products
      WHERE active = true
@@ -70,8 +71,8 @@ router.post('/orders', requireCustomerAuth, async (req, res) => {
       await client.query('UPDATE orders SET total = total + $1 WHERE id = $2', [newItemsTotal, orderId]);
     } else {
       const orderResult = await client.query(
-        `INSERT INTO orders (customer_id, delivery_date, notes, total, original_total)
-         VALUES ($1, $2, $3, $4, $4) RETURNING id`,
+        `INSERT INTO orders (customer_id, delivery_date, notes, total, original_total, source)
+         VALUES ($1, $2, $3, $4, $4, 'mobile') RETURNING id`,
         [customer_id, delivery_date, notes || null, newItemsTotal]
       );
       orderId = orderResult.rows[0].id;
@@ -88,7 +89,12 @@ router.post('/orders', requireCustomerAuth, async (req, res) => {
 
     await client.query('COMMIT');
 
-    pushToQB({ id: orderId, customer_id, delivery_date, notes: notes || null }, items).catch(err => {
+    // source is read fresh here rather than assumed 'mobile' — this call may
+    // have merged into an existing same-day order created via a different
+    // surface (source is set once at creation and never changes), and
+    // pushToQBInner needs the real value for the PrivateNote it writes.
+    const sourceResult = await pool.query('SELECT source FROM orders WHERE id = $1', [orderId]);
+    pushToQB({ id: orderId, customer_id, delivery_date, notes: notes || null, source: sourceResult.rows[0].source }).catch(err => {
       const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
       console.error(`QB invoice push failed for mobile order ${orderId}:`, detail);
     });
@@ -103,6 +109,74 @@ router.post('/orders', requireCustomerAuth, async (req, res) => {
   } finally {
     client.release();
   }
+});
+
+// GET /api/mobile/orders — this customer's orders, most recent delivery first
+router.get('/orders', requireCustomerAuth, async (req, res) => {
+  const result = await pool.query(
+    `SELECT * FROM orders WHERE customer_id = $1 ORDER BY delivery_date DESC, order_placed_at DESC`,
+    [req.user.customer_id]
+  );
+  res.json(result.rows);
+});
+
+// GET /api/mobile/orders/:id — order + active items, ownership-checked
+router.get('/orders/:id', requireCustomerAuth, async (req, res) => {
+  const orderResult = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
+  if (!orderResult.rows.length) return res.status(404).json({ error: 'Order not found' });
+  const order = orderResult.rows[0];
+  if (order.customer_id !== req.user.customer_id) return res.status(404).json({ error: 'Order not found' });
+
+  const itemsResult = await pool.query(
+    `SELECT oi.*, p.sku, p.description
+     FROM order_items oi JOIN products p ON p.id = oi.product_id
+     WHERE oi.order_id = $1 AND oi.status = 'active'`,
+    [order.id]
+  );
+  res.json({ ...order, items: itemsResult.rows });
+});
+
+// PATCH /api/mobile/orders/:id — customer self-edit. Only their own
+// mobile-origin orders, only before the edit cutoff — same cutoff and no
+// exemption for admin either (see ordersController.editOrder): our system
+// owns an order until the cutoff, QuickBooks owns it after, no exceptions.
+//
+// Cutoff is 2:00am Pacific on the delivery date itself — ties to when
+// picking/prep actually starts, not to how far in advance the order was
+// placed, so an order placed a week ahead stays editable right up until the
+// morning it's delivered, same as one placed the night before. Confirmed
+// with the business: any QB-side weight/price correction for a fish order
+// only ever happens after this window closes, so this cutoff and the QB-side
+// correction never overlap.
+router.patch('/orders/:id', requireCustomerAuth, async (req, res) => {
+  const { items } = req.body;
+  if (!Array.isArray(items) || !items.length) {
+    return res.status(400).json({ error: 'items are required' });
+  }
+
+  const orderResult = await pool.query(
+    `SELECT *, (NOW() > ((delivery_date::timestamp + INTERVAL '2 hours') AT TIME ZONE 'America/Los_Angeles')) AS past_edit_cutoff
+     FROM orders WHERE id = $1`,
+    [req.params.id]
+  );
+  if (!orderResult.rows.length) return res.status(404).json({ error: 'Order not found' });
+  const order = orderResult.rows[0];
+
+  if (order.customer_id !== req.user.customer_id) return res.status(403).json({ error: 'Not your order' });
+  if (order.source !== 'mobile') return res.status(403).json({ error: 'This order can only be edited by staff' });
+  if (order.status === 'voided') return res.status(400).json({ error: 'Cannot edit a voided order' });
+  if (order.past_edit_cutoff) return res.status(400).json({ error: 'The edit window for this order has closed. Contact us if you need a change made.' });
+
+  let qbSynced = true;
+  try {
+    ({ qbSynced } = await applyOrderEdit(order, items));
+  } catch (err) {
+    if (err.status === 400) return res.status(400).json({ error: err.message });
+    throw err;
+  }
+
+  const updated = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
+  res.json({ ...updated.rows[0], qb_synced: qbSynced });
 });
 
 // PATCH /api/mobile/salmon-prefs — one-time set at signup; rejected if already saved

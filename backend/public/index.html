@@ -450,6 +450,26 @@
   </div>
 </div>
 
+<!-- MODAL: Edit Order (mobile/admin-origin only — QB-origin orders are edited in QuickBooks) -->
+<div class="modal-overlay" id="modal-order-edit">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title">Edit Order</div>
+      <button class="modal-close" onclick="closeModal('modal-order-edit')">X</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:11px;font-weight:bold;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px;">Order Items</div>
+      <div id="eo-items-list" style="display:flex;flex-direction:column;gap:6px;"></div>
+      <button class="btn btn-outline" style="width:100%;margin-top:8px;font-size:11px;" onclick="addOrderItemRow('eo-items-list')">+ ADD ITEM</button>
+      <div class="form-error" id="eo-error"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-order-edit')">CANCEL</button>
+      <button class="btn btn-primary" onclick="submitOrderEdit()">SAVE CHANGES</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL: New Customer -->
 <div class="modal-overlay" id="modal-customer">
   <div class="modal">
@@ -663,6 +683,7 @@ let orderFilterRange = '3days'; // 'today' | '3days' | 'week' | 'month'
 let orderFilterDirection = 'past'; // 'past' | 'future' (ignored for 'today')
 let expandedOrderId = null;
 let expandedOrderCache = {}; // order id -> full detail (with line items), fetched once per expand
+let editingOrderId = null;
 
 // Local calendar-day string (YYYY-MM-DD) — NEVER use Date#toISOString() for this.
 // toISOString() converts to UTC first, so anything computed late at night in a
@@ -679,6 +700,18 @@ function addDays(date, n) {
   const d = new Date(date);
   d.setDate(d.getDate() + n);
   return d;
+}
+
+// Edit cutoff is 2am on the delivery date itself — same rule and no
+// exemption for admin, matching ordersController.editOrder exactly (our
+// system owns an order until this cutoff, QuickBooks owns it after).
+// delivery_date arrives UTC-serialized — pull the Y-M-D digits directly
+// rather than reinterpreting through Date/local-getters (same trap this
+// codebase already has scars from, see OrderHistory.js on the mobile side).
+function pastEditCutoff(deliveryDateStr) {
+  const [y, m, d] = deliveryDateStr.slice(0, 10).split('-').map(Number);
+  const cutoff = new Date(y, m - 1, d, 2, 0, 0, 0);
+  return new Date() > cutoff;
 }
 
 /* ── Auth ── */
@@ -963,10 +996,18 @@ function renderOrders() {
     const totalDisplay = isModified && origTotal && origTotal !== total
       ? `<span style="text-decoration:line-through;color:var(--gray-dark);font-size:11px;">${origTotal}</span> ${total}`
       : total;
-    const rowStyle = isVoided ? 'opacity:0.5;background:#f5f5f5;' : isModified ? 'background:#fffbe6;' : '';
-    const statusBadge = isVoided
+    const originBorder = o.source === 'qb' ? 'border-left:4px solid #1a7f37;'
+      : o.source === 'mobile' ? 'border-left:4px solid #3d82f6;' : '';
+    const rowStyle = (isVoided ? 'opacity:0.5;background:#f5f5f5;' : isModified ? 'background:#fffbe6;' : '') + originBorder;
+    // push_attempts > 0 with a qb_invoice_id already set means an *edit* push
+    // failed (applyOrderEdit pushes synchronously but doesn't roll back the
+    // local edit on QB failure) — distinct from the pending-creation "stuck"
+    // case (checkPendingInvoices), which only tracks orders with no invoice yet.
+    const editPushFailed = o.qb_invoice_id && o.push_attempts > 0;
+    const statusBadge = (isVoided
       ? '<span class="badge badge-gray" style="margin-left:6px;">VOIDED</span>'
-      : isModified ? '<span class="badge badge-amber" style="margin-left:6px;">MODIFIED</span>' : '';
+      : isModified ? '<span class="badge badge-amber" style="margin-left:6px;">MODIFIED</span>' : '')
+      + (editPushFailed ? `<span class="badge badge-red" style="margin-left:6px;" title="${(o.last_push_error||'').replace(/"/g,'&quot;')}">⚠ QB SYNC FAILED — re-save to retry</span>` : '');
     const isExpanded = expandedOrderId === o.id;
     return `
       <div class="order-row" style="${rowStyle}">
@@ -1034,6 +1075,13 @@ function renderOrderDetailHTML(order) {
       <tbody>${items || '<tr><td colspan="4" class="empty-state">No line items</td></tr>'}${removedItems}</tbody>
     </table>
     <div style="margin-top:12px;text-align:right;">
+      ${(() => {
+        if (isVoided) return `<button class="btn btn-outline" disabled title="This order is voided.">EDIT ORDER</button>`;
+        if (order.source === 'qb' || pastEditCutoff(order.delivery_date)) {
+          return `<button class="btn btn-outline" disabled title="Please edit on QuickBooks instead.">EDIT ORDER</button>`;
+        }
+        return `<button class="btn btn-outline" onclick="openEditOrderModal(${order.id})">EDIT ORDER</button>`;
+      })()}
       <button class="btn" style="background:var(--red);color:white;border-color:var(--red-dark);" onclick="deleteOrderInline(${order.id})">DELETE ORDER</button>
     </div>`;
 }
@@ -1051,19 +1099,26 @@ async function deleteOrderInline(id) {
 /* ── Products ── */
 function renderProducts(q = '') {
   productSearchQuery = q;
-  const list = q ? allProducts.filter(p =>
+  let list = q ? allProducts.filter(p =>
     p.description.toLowerCase().includes(q.toLowerCase()) ||
     p.sku.toLowerCase().includes(q.toLowerCase())
   ) : allProducts;
+  // Overridden items never auto-clear (see order_editing_clarifications.md) —
+  // sort them to the top regardless of category/normal order so a forgotten
+  // one is never buried where nobody would notice it.
+  list = [...list].sort((a, b) => (b.available_override ? 1 : 0) - (a.available_override ? 1 : 0));
   document.getElementById('product-count').textContent = list.length + ' items';
   document.getElementById('product-head').innerHTML = productDeleteMode
     ? '<tr><th style="width:32px;"></th><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Status</th><th>Actions</th></tr>'
     : '<tr><th>SKU</th><th>Description</th><th>Unit</th><th>Cost</th><th>Price</th><th>On Hand</th><th>Status</th><th>Actions</th></tr>';
   document.getElementById('product-body').innerHTML = list.length ? list.map(product => {
+    const available = product.quantity_on_hand > 0 || product.available_override;
     const status = !product.active ? '<span class="badge badge-gray">INACTIVE</span>'
-      : product.quantity_on_hand <= 0 ? '<span class="badge badge-red">OUT OF STOCK</span>'
-      : product.reorder_point && product.quantity_on_hand <= product.reorder_point ? '<span class="badge badge-amber">LOW</span>'
+      : !available ? '<span class="badge badge-red">OUT OF STOCK</span>'
+      : product.reorder_point && product.quantity_on_hand <= product.reorder_point && !product.available_override
+        ? '<span class="badge badge-amber">LOW</span>'
       : '<span class="badge badge-green">ACTIVE</span>';
+    const overrideBadge = product.available_override ? ' <span class="badge badge-amber" title="Manually marked available regardless of synced quantity — never clears automatically">OVERRIDDEN</span>' : '';
     const qbBadge = product.qb_item_id ? '' : ' <span class="badge badge-gray" title="Not linked to QuickBooks — add this product in QB then run Sync from QB">NO QB</span>';
     const price = product.show_price ? '$'+parseFloat(product.price||0).toFixed(2) : '<span style="color:var(--gray-dark);font-style:italic;">Market</span>';
     return `<tr>
@@ -1074,14 +1129,40 @@ function renderProducts(q = '') {
       <td class="mono">${product.cost ? '$'+parseFloat(product.cost).toFixed(2) : '—'}</td>
       <td class="mono">${price}</td>
       <td class="mono">${product.quantity_on_hand ?? '—'}</td>
-      <td>${status}${qbBadge}</td>
+      <td>${status}${overrideBadge}${qbBadge}</td>
       <td style="white-space:nowrap;">
         <button class="action-btn" onclick="triggerImageUpload(${product.id})" title="${product.image_url ? 'Replace image' : 'Upload image'}" style="${product.image_url ? 'background:var(--green-light,#e6f4ea);color:#1a7f37;border-color:#1a7f37;' : ''}">&#128247;</button>
+        <button class="action-btn" onclick="markProductOutOfStock(${product.id},'${product.description.replace(/'/g,"\\'")}')" title="Set QuickBooks quantity to 0">OUT</button>
+        <button class="action-btn" onclick="toggleAvailableOverride(${product.id}, ${!product.available_override})" title="${product.available_override ? 'Remove the manual availability override' : 'Force this item available regardless of synced quantity'}" style="${product.available_override ? 'background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);' : ''}">${product.available_override ? 'UN-OVERRIDE' : 'MAKE AVAILABLE'}</button>
         <button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="deleteProduct(${product.id},'${product.description.replace(/'/g,"\\'")}')">&#10005;</button>
       </td>
     </tr>`;
   }).join('') : `<tr><td colspan="${productDeleteMode ? 9 : 8}" class="empty-state">No products found.</td></tr>`;
   updateProductDeleteControls();
+}
+
+async function markProductOutOfStock(id, name) {
+  if (!confirm(`Set "${name}" to out of stock? This sets quantity to 0 in QuickBooks too.`)) return;
+  const res = await api(`/api/products/${id}/out-of-stock`, { method: 'PATCH' });
+  if (res && res.id) {
+    allProducts = await api('/api/products') || allProducts;
+    renderProducts(productSearchQuery);
+  } else {
+    alert((res && res.error) || 'Failed to mark out of stock');
+  }
+}
+
+async function toggleAvailableOverride(id, nextValue) {
+  const res = await api(`/api/products/${id}/available-override`, {
+    method: 'PATCH',
+    body: JSON.stringify({ available_override: nextValue })
+  });
+  if (res && res.id) {
+    allProducts = await api('/api/products') || allProducts;
+    renderProducts(productSearchQuery);
+  } else {
+    alert((res && res.error) || 'Failed to update availability override');
+  }
 }
 
 async function deleteProduct(id, name) {
@@ -1214,22 +1295,24 @@ async function saveSalmonCut() {
 
 /* ── Inventory ── */
 function renderInventory() {
-  const oos = allProducts.filter(p => p.active && p.quantity_on_hand <= 0);
-  const low = allProducts.filter(p => p.active && p.quantity_on_hand > 0 && p.reorder_point && p.quantity_on_hand <= p.reorder_point);
+  const available = p => p.quantity_on_hand > 0 || p.available_override;
+  const oos = allProducts.filter(p => p.active && !available(p));
+  const low = allProducts.filter(p => p.active && available(p) && p.reorder_point && p.quantity_on_hand <= p.reorder_point && !p.available_override);
   document.getElementById('inv-total').textContent = allProducts.filter(p => p.active).length;
   document.getElementById('inv-oos').textContent = oos.length;
   document.getElementById('inv-low').textContent = low.length;
   document.getElementById('inventory-body').innerHTML = allProducts.filter(p => p.active).map(p => {
-    const status = p.quantity_on_hand <= 0 ? '<span class="badge badge-red">OUT OF STOCK</span>'
-      : p.reorder_point && p.quantity_on_hand <= p.reorder_point ? '<span class="badge badge-amber">LOW</span>'
+    const status = !available(p) ? '<span class="badge badge-red">OUT OF STOCK</span>'
+      : p.reorder_point && p.quantity_on_hand <= p.reorder_point && !p.available_override ? '<span class="badge badge-amber">LOW</span>'
       : '<span class="badge badge-green">IN STOCK</span>';
+    const overrideBadge = p.available_override ? ' <span class="badge badge-amber" title="Manually marked available regardless of synced quantity — never clears automatically">OVERRIDDEN</span>' : '';
     return `<tr>
       <td class="mono" style="font-size:11px;">${p.sku}</td>
       <td>${p.description}</td>
       <td class="mono">${p.unit}</td>
       <td class="mono" title="Synced from QuickBooks — edit in QB to change">${p.quantity_on_hand ?? 0}</td>
       <td class="mono">${p.reorder_point ?? '—'}</td>
-      <td id="inv-status-${p.id}">${status}</td>
+      <td id="inv-status-${p.id}">${status}${overrideBadge}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="6" class="empty-state">No products.</td></tr>';
 }
@@ -1515,8 +1598,8 @@ function filterOrderCustomerOptions(query) {
   if (list.some(c => String(c.id) === prevValue)) sel.value = prevValue;
 }
 
-function addOrderItemRow() {
-  const list = document.getElementById('no-items-list');
+function addOrderItemRow(containerId = 'no-items-list') {
+  const list = document.getElementById(containerId);
   const div = document.createElement('div');
   div.className = 'order-item-row';
   div.style.cssText = 'display:grid;grid-template-columns:2fr 80px 80px auto 28px;gap:6px;align-items:start;';
@@ -1533,7 +1616,7 @@ function addOrderItemRow() {
   const select = div.querySelector('select');
   populateProductOptions(select, '');
   syncUnit(select);
-  updateRemoveButtons();
+  updateRemoveButtons(containerId);
 }
 
 function populateProductOptions(select, query) {
@@ -1559,17 +1642,18 @@ function filterOrderProductOptions(inputEl) {
 function removeOrderItemRow(btn) {
   const row = btn.closest('.order-item-row');
   if (!row) return;
+  const containerId = row.parentElement.id;
   row.remove();
   // never leave the modal with zero rows
-  if (!document.querySelectorAll('#no-items-list .order-item-row').length) {
-    addOrderItemRow();
+  if (!document.querySelectorAll(`#${containerId} .order-item-row`).length) {
+    addOrderItemRow(containerId);
   } else {
-    updateRemoveButtons();
+    updateRemoveButtons(containerId);
   }
 }
 
-function updateRemoveButtons() {
-  const rows = document.querySelectorAll('#no-items-list .order-item-row');
+function updateRemoveButtons(containerId = 'no-items-list') {
+  const rows = document.querySelectorAll(`#${containerId} .order-item-row`);
   rows.forEach(r => {
     const btn = r.querySelector('.remove-item-btn');
     if (btn) btn.disabled = rows.length === 1;
@@ -1629,6 +1713,65 @@ async function submitOrder() {
     await refreshOrdersAfterMutation();
   } else {
     showErr(errEl, (res && res.error) || 'Failed to create order');
+  }
+}
+
+/* ── Edit Order modal — mobile/admin-origin orders only ── */
+async function openEditOrderModal(orderId) {
+  const order = expandedOrderCache[orderId] || await api(`/api/orders/${orderId}`);
+  if (!order) return;
+  editingOrderId = orderId;
+
+  const list = document.getElementById('eo-items-list');
+  list.innerHTML = '';
+  const items = order.items || [];
+  if (!items.length) {
+    addOrderItemRow('eo-items-list');
+  } else {
+    items.forEach(it => {
+      addOrderItemRow('eo-items-list');
+      const rows = list.querySelectorAll('.order-item-row');
+      const row = rows[rows.length - 1];
+      const select = row.querySelector('select');
+      select.value = it.product_id;
+      syncUnit(select);
+      row.querySelector('.qty-input').value = it.quantity;
+    });
+  }
+  document.getElementById('eo-error').style.display = 'none';
+  openModal('modal-order-edit');
+}
+
+async function submitOrderEdit() {
+  const errEl = document.getElementById('eo-error');
+  const rows = document.getElementById('eo-items-list').querySelectorAll('.order-item-row');
+  const rowData = Array.from(rows).map(row => {
+    const sel = row.querySelector('select');
+    const input = row.querySelector('.qty-input');
+    return { product_id: sel.value, quantity: parseFloat(input.value) || 0 };
+  });
+
+  if (rowData.some(it => it.quantity > 0 && !it.product_id)) {
+    showErr(errEl, 'Select a product for each item with a quantity');
+    return;
+  }
+
+  const items = rowData
+    .filter(it => it.quantity > 0 && it.product_id)
+    .map(it => ({ product_id: parseInt(it.product_id), quantity: it.quantity }));
+
+  if (!items.length) { showErr(errEl, 'Add at least one item with a quantity'); return; }
+
+  const res = await api(`/api/orders/${editingOrderId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ items })
+  });
+  if (res && res.id) {
+    closeModal('modal-order-edit');
+    delete expandedOrderCache[editingOrderId];
+    await refreshOrdersAfterMutation();
+  } else {
+    showErr(errEl, (res && res.error) || 'Failed to update order');
   }
 }
 

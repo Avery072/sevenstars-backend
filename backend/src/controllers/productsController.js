@@ -4,6 +4,7 @@ const {
   deleteQBItem,
   getOrCreateQBItemCategory,
   getQBInventoryItemAccountRefs,
+  setQBItemQuantity,
 } = require('../middleware/qbSync');
 const cloudinary = require('cloudinary').v2;
 cloudinary.config({
@@ -256,6 +257,43 @@ async function toggleShowPrice(req, res) {
   res.json(result.rows[0]);
 }
 
+// PATCH /api/products/:id/out-of-stock — sets QB's own quantity to 0
+// synchronously (write-through, not local-then-push) so QB stays the actual
+// ground truth for the number and a stray webhook can't silently revert it.
+async function markOutOfStock(req, res) {
+  const { id } = req.params;
+
+  const productResult = await pool.query('SELECT qb_item_id FROM products WHERE id = $1', [id]);
+  if (!productResult.rows.length) return res.status(404).json({ error: 'Product not found' });
+  const { qb_item_id } = productResult.rows[0];
+  if (!qb_item_id) return res.status(400).json({ error: 'Product has no linked QuickBooks item — run Sync from QB first' });
+
+  await setQBItemQuantity(qb_item_id, 0);
+
+  const result = await pool.query(
+    'UPDATE products SET quantity_on_hand = 0, updated_at = NOW() WHERE id = $1 RETURNING *',
+    [id]
+  );
+  res.json(result.rows[0]);
+}
+
+// PATCH /api/products/:id/available-override — { available_override: bool }.
+// Purely local, never sent to or read from QuickBooks — see migration 016.
+async function setAvailableOverride(req, res) {
+  const { id } = req.params;
+  const { available_override } = req.body;
+  if (typeof available_override !== 'boolean') {
+    return res.status(400).json({ error: 'available_override (boolean) is required' });
+  }
+
+  const result = await pool.query(
+    'UPDATE products SET available_override = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+    [available_override, id]
+  );
+  if (!result.rows.length) return res.status(404).json({ error: 'Product not found' });
+  res.json(result.rows[0]);
+}
+
 async function deleteProduct(req, res) {
   const { id } = req.params;
 
@@ -293,4 +331,4 @@ async function uploadProductImage(req, res) {
   }
 }
 
-module.exports = { listProducts, createProduct, updateProduct, toggleShowPrice, deleteProduct, uploadProductImage };
+module.exports = { listProducts, createProduct, updateProduct, toggleShowPrice, markOutOfStock, setAvailableOverride, deleteProduct, uploadProductImage };

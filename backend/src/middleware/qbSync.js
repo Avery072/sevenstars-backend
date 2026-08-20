@@ -261,6 +261,60 @@ async function appendToQBInvoice(invoiceId, newLines) {
   }
 }
 
+// Applies a *targeted* patch to an existing invoice's sales lines — removes
+// lines named in removeLineIds, replaces lines named in updateLines (matched
+// by Id), appends addLines (no Id) — and leaves every other sales line
+// exactly as QB currently has it. This is deliberately not a blind full
+// replace: QBO's own Line[] update semantics require resending the complete
+// array, but resending a line we didn't intend to touch using our local copy
+// of it would silently clobber a concurrent QB-side change to that line
+// (e.g. a weight/price correction on a different line of the same invoice,
+// made directly in QuickBooks while we're mid-push). Fetching the invoice
+// fresh immediately before posting — same pattern as appendToQBInvoice —
+// means untouched lines always come from QB's live state, not a possibly-
+// stale local copy, and this also keeps QB's own SyncToken check happy.
+async function patchQBInvoiceLines(invoiceId, { removeLineIds = [], updateLines = [], addLines = [] } = {}) {
+  try {
+    const client = await getQBClient();
+    const { data } = await client.get(`/invoice/${invoiceId}?minorversion=65`);
+    const inv = data.Invoice;
+
+    const removeSet = new Set(removeLineIds);
+    const updateMap = new Map(updateLines.map(l => [l.Id, l]));
+
+    const nonSalesLines = (inv.Line || []).filter(l => l.DetailType !== 'SalesItemLineDetail');
+    const currentSalesLines = (inv.Line || []).filter(l => l.DetailType === 'SalesItemLineDetail');
+
+    const keptLines = currentSalesLines
+      .filter(l => !removeSet.has(l.Id))
+      .map(l => updateMap.has(l.Id) ? updateMap.get(l.Id) : l);
+
+    const { data: updated } = await client.post('/invoice?minorversion=65', {
+      ...inv,
+      Line: [...nonSalesLines, ...keptLines, ...addLines],
+    });
+    return updated.Invoice;
+  } catch (err) {
+    logQBError(`QB invoice line patch ${invoiceId}`, err);
+    throw err;
+  }
+}
+
+// Sets a QB Inventory item's QtyOnHand — fetches the item fresh first (for
+// Id/SyncToken, QBO's own concurrency check) then a sparse update, same
+// fetch-fresh-then-post pattern as appendToQBInvoice/patchQBInvoiceLines.
+// Used for the admin "OUT OF STOCK" action — write-through, not local-then-
+// push, so a stray webhook can't silently revert the action.
+async function setQBItemQuantity(qbItemId, quantity) {
+  const item = await fetchQBItem(qbItemId);
+  return updateQBItem({
+    Id: item.Id,
+    SyncToken: item.SyncToken,
+    sparse: true,
+    QtyOnHand: quantity,
+  });
+}
+
 async function updateQBItem(itemPayload) {
   try {
     const client = await getQBClient();
@@ -304,6 +358,7 @@ module.exports = {
   fetchQBInvoice,
   createQBInvoice,
   appendToQBInvoice,
+  patchQBInvoiceLines,
   deleteQBInvoice,
   isDuplicateDocNumberError,
   createQBCustomer,
@@ -313,4 +368,5 @@ module.exports = {
   getQBAccounts,
   getQBInventoryItemAccountRefs,
   updateQBItem,
+  setQBItemQuantity,
 };
