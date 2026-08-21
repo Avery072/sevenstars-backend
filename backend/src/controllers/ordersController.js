@@ -487,11 +487,23 @@ async function applyOrderEdit(order, newItems) {
 
     const currentResult = await client.query(
       `SELECT id, product_id, quantity, unit_price, qb_line_id
-       FROM order_items WHERE order_id = $1 AND status = 'active'`,
+       FROM order_items WHERE order_id = $1 AND status = 'active'
+       ORDER BY id ASC`,
       [order.id]
     );
     const current = currentResult.rows;
-    const currentByProduct = new Map(current.map(row => [row.product_id, row]));
+    // Grouped into arrays, not a 1:1 Map — a product can legitimately have
+    // more than one active line (two same-day orders for the same product
+    // merge into two separate order_items rows, not one summed row). A
+    // straight `new Map(rows.map(r => [r.product_id, r]))` would silently
+    // keep only the last row seen per product and orphan the rest —
+    // reconcileExistingOrder avoids exactly this by matching on qb_line_id
+    // instead of product_id; this needs the same care.
+    const currentByProduct = new Map();
+    for (const row of current) {
+      if (!currentByProduct.has(row.product_id)) currentByProduct.set(row.product_id, []);
+      currentByProduct.get(row.product_id).push(row);
+    }
 
     const newByProduct = new Map();
     for (const item of newItems) {
@@ -529,10 +541,10 @@ async function applyOrderEdit(order, newItems) {
     const released = !!order.reservation_released_at;
 
     for (const productId of allProductIds) {
-      const before = currentByProduct.has(productId) ? Number(currentByProduct.get(productId).quantity) : 0;
+      const before = (currentByProduct.get(productId) || []).reduce((sum, r) => sum + Number(r.quantity), 0);
       const after = newByProduct.get(productId) || 0;
       const delta = after - before;
-      if (delta === 0) continue;
+      if (Math.abs(delta) <= 0.0001) continue;
 
       const product = lockedProducts.get(productId);
 
@@ -556,24 +568,45 @@ async function applyOrderEdit(order, newItems) {
     }
     for (const [productId, quantity] of newByProduct.entries()) {
       const p = productMap[productId];
-      const existingRow = currentByProduct.get(productId);
-      if (existingRow) {
-        if (Number(existingRow.quantity) !== quantity) {
-          // qb_dirty marks this line as needing a QB push — durable, so a
-          // retry after a failed push (possibly on a fresh process) knows
-          // exactly which lines to patch without re-diffing against QB's
-          // live state, which would be ambiguous (see patchQBInvoiceLines).
-          await client.query(
-            'UPDATE order_items SET quantity = $1, unit_price = $2, unit = $3, qb_dirty = (qb_line_id IS NOT NULL) WHERE id = $4',
-            [quantity, p.price, p.unit, existingRow.id]
-          );
-        }
-      } else {
+      const existingRows = currentByProduct.get(productId) || [];
+
+      if (!existingRows.length) {
         const itemNotes = newItems.find(i => i.product_id === productId)?.notes || null;
         await client.query(
           `INSERT INTO order_items (order_id, product_id, quantity, unit, unit_price, notes, status)
            VALUES ($1, $2, $3, $4, $5, $6, 'active')`,
           [order.id, productId, quantity, p.unit, p.price, itemNotes]
+        );
+        continue;
+      }
+
+      const currentTotal = existingRows.reduce((sum, r) => sum + Number(r.quantity), 0);
+      // Tolerance, not strict equality — quantities can be fractional
+      // (weight-based fish), same pattern reconcileExistingOrder already
+      // uses for its own line-changed check.
+      if (Math.abs(currentTotal - quantity) <= 0.0001) continue; // genuinely untouched — leave every row, including duplicates, exactly as-is
+
+      // The edit API can only ever express one target quantity per product
+      // (newByProduct is itself a sum, never per-line), so there's no way
+      // for a caller to say "keep these as two distinct lines" once one of
+      // them changes. Consolidate onto the oldest row (most likely to
+      // already carry a qb_line_id, so the QB push updates it in place
+      // rather than removing+re-adding) and soft-remove any others for this
+      // product — instead of the old behavior, which touched an arbitrary
+      // one and silently orphaned the rest.
+      const [primary, ...extras] = existingRows;
+      // qb_dirty marks this line as needing a QB push — durable, so a
+      // retry after a failed push (possibly on a fresh process) knows
+      // exactly which lines to patch without re-diffing against QB's
+      // live state, which would be ambiguous (see patchQBInvoiceLines).
+      await client.query(
+        'UPDATE order_items SET quantity = $1, unit_price = $2, unit = $3, qb_dirty = (qb_line_id IS NOT NULL) WHERE id = $4',
+        [quantity, p.price, p.unit, primary.id]
+      );
+      for (const extra of extras) {
+        await client.query(
+          `UPDATE order_items SET status = 'removed', qb_dirty = FALSE WHERE id = $1`,
+          [extra.id]
         );
       }
     }
