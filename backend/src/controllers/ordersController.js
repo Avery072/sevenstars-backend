@@ -312,7 +312,7 @@ async function pushToQB(order) {
 // already in QB — pushing already-pushed lines again would duplicate them.
 async function unpushedOrderLines(orderId) {
   const itemsResult = await pool.query(
-    `SELECT oi.id, oi.quantity, oi.unit_price, p.qb_item_id, p.price
+    `SELECT oi.id, oi.quantity, oi.unit_price, oi.notes, p.qb_item_id, p.price, p.description
      FROM order_items oi
      JOIN products p ON p.id = oi.product_id
      WHERE oi.order_id = $1 AND oi.status = 'active' AND oi.qb_line_id IS NULL
@@ -325,21 +325,11 @@ async function unpushedOrderLines(orderId) {
     console.warn(`Order ${orderId}: skipping ${noQbId.length} item(s) with no qb_item_id`);
   }
 
+  // unit_price here should prefer the current product price the same way
+  // buildQBLine's callers do, so this stays consistent with the edit path.
   return itemsResult.rows
     .filter(item => item.qb_item_id)
-    .map(item => {
-      const unitPrice = parseFloat(item.price ?? item.unit_price ?? 0);
-      const qty = parseFloat(item.quantity);
-      return {
-        Amount: qty * unitPrice,
-        DetailType: 'SalesItemLineDetail',
-        SalesItemLineDetail: {
-          ItemRef: { value: item.qb_item_id },
-          Qty: qty,
-          UnitPrice: unitPrice,
-        },
-      };
-    });
+    .map(item => buildQBLine({ ...item, unit_price: item.price ?? item.unit_price }));
 }
 
 async function pushToQBInner(order) {
@@ -680,11 +670,25 @@ async function retryOrderEditPush(orderId) {
 }
 
 // Builds a line payload from an order_items row for the QB API.
+//
+// Description was never being set here at all — QBO's own UI auto-fills a
+// line's description when a human picks an item, but that's a UI
+// convenience, not something the API does for you on a bare POST. Every
+// order placed through the app/admin was silently shipping invoice lines
+// with no description as a result (reported: invoice 34821, FKING-WHITE and
+// FSMKSAL had none, vs. 34826 created directly in QBO's UI with the same
+// products, which did). Falls back through order_items.notes (matches the
+// pull direction, which already treats a QB line's Description as
+// equivalent to notes — see processInvoice's insert) to the product's own
+// catalog description, so every line gets *something* even when no
+// per-line note was ever entered.
 function buildQBLine(item) {
   const qty = parseFloat(item.quantity);
   const unitPrice = parseFloat(item.unit_price || 0);
+  const description = item.notes || item.description || undefined;
   return {
     ...(item.qb_line_id ? { Id: item.qb_line_id } : {}),
+    ...(description ? { Description: description } : {}),
     Amount: qty * unitPrice,
     DetailType: 'SalesItemLineDetail',
     SalesItemLineDetail: {
@@ -719,13 +723,13 @@ async function pushOrderEditToQB(orderId) {
       [orderId]
     ),
     pool.query(
-      `SELECT oi.id, oi.qb_line_id, oi.quantity, oi.unit_price, p.qb_item_id
+      `SELECT oi.id, oi.qb_line_id, oi.quantity, oi.unit_price, oi.notes, p.qb_item_id, p.description
        FROM order_items oi JOIN products p ON p.id = oi.product_id
        WHERE oi.order_id = $1 AND oi.status = 'active' AND oi.qb_dirty = TRUE AND oi.qb_line_id IS NOT NULL`,
       [orderId]
     ),
     pool.query(
-      `SELECT oi.id, oi.quantity, oi.unit_price, p.qb_item_id
+      `SELECT oi.id, oi.quantity, oi.unit_price, oi.notes, p.qb_item_id, p.description
        FROM order_items oi JOIN products p ON p.id = oi.product_id
        WHERE oi.order_id = $1 AND oi.status = 'active' AND oi.qb_line_id IS NULL
        ORDER BY oi.id ASC`,
