@@ -220,6 +220,28 @@ async function deleteQBInvoice(qbInvoiceId) {
   }
 }
 
+// Voids an invoice rather than deleting it — QBO zeroes its amounts and
+// prepends "Voided" to PrivateNote (the same signal isVoided() in
+// webhooksController already watches for staff-initiated voids done directly
+// in QuickBooks), but the transaction itself, its DocNumber, and its line
+// history all stay intact for the audit trail. Same fetch-fresh-then-post
+// pattern as deleteQBInvoice for the SyncToken.
+async function voidQBInvoice(qbInvoiceId) {
+  try {
+    const client = await getQBClient();
+    const { data } = await client.get(`/invoice/${qbInvoiceId}?minorversion=65`);
+    const inv = data.Invoice;
+    await client.post(`/invoice?operation=void&minorversion=65`, {
+      Id: inv.Id,
+      SyncToken: inv.SyncToken,
+    });
+    console.log(`QB invoice ${qbInvoiceId} voided`);
+  } catch (err) {
+    logQBError(`QB invoice void ${qbInvoiceId}`, err);
+    throw err;
+  }
+}
+
 async function deleteQBItem(qbItemId) {
   try {
     const client = await getQBClient();
@@ -360,6 +382,7 @@ module.exports = {
   appendToQBInvoice,
   patchQBInvoiceLines,
   deleteQBInvoice,
+  voidQBInvoice,
   isDuplicateDocNumberError,
   createQBCustomer,
   createQBItem,

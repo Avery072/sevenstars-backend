@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { requireCustomerAuth } = require('../middleware/auth');
 const pool = require('../config/db');
-const { pushToQB, checkAndReserveStock, applyOrderEdit } = require('../controllers/ordersController');
+const { pushToQB, checkAndReserveStock, applyOrderEdit, voidOrder } = require('../controllers/ordersController');
 
 // GET /api/mobile/products — public (no login required): App Store/Play Store
 // review requires letting users browse the catalog before creating an account.
@@ -178,6 +178,11 @@ router.patch('/orders/:id', requireCustomerAuth, async (req, res) => {
   const updated = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
   res.json({ ...updated.rows[0], qb_synced: qbSynced });
 });
+
+// DELETE /api/mobile/orders/:id — customer self-cancel. Not a hard delete —
+// see voidOrder's own comment for why (paper trail via QB void, same cutoff
+// as the PATCH edit route above).
+router.delete('/orders/:id', requireCustomerAuth, voidOrder);
 
 // PATCH /api/mobile/salmon-prefs — one-time set at signup; rejected if already saved
 router.patch('/salmon-prefs', requireCustomerAuth, async (req, res) => {

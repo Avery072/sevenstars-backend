@@ -1,5 +1,5 @@
 const pool = require('../config/db');
-const { createQBInvoice, appendToQBInvoice, patchQBInvoiceLines, createQBCustomer, getQBClient, deleteQBInvoice, isDuplicateDocNumberError } = require('../middleware/qbSync');
+const { createQBInvoice, appendToQBInvoice, patchQBInvoiceLines, createQBCustomer, getQBClient, deleteQBInvoice, voidQBInvoice, isDuplicateDocNumberError } = require('../middleware/qbSync');
 
 async function nextQBDocNumber() {
   const { rows } = await pool.query("SELECT nextval('qb_invoice_doc_number_seq')::text AS n");
@@ -863,6 +863,65 @@ async function deleteOrder(req, res) {
   res.json({ message: 'Order deleted' });
 }
 
+// DELETE /api/mobile/orders/:id — customer self-cancel. Doesn't hard-delete:
+// the order row and its line items stay put for a paper trail, and if it's
+// already been invoiced, the QB invoice is voided (not deleted) — same
+// zero-the-amounts-but-keep-the-record convention as a staff-initiated Void
+// done directly in QuickBooks (see isVoided() in webhooksController, which
+// this reuses via the same "Voided"-in-PrivateNote signal). The order still
+// shows up in the customer's order history afterward, just flagged voided.
+//
+// Same ownership/source/cutoff rules as the mobile edit endpoint (see
+// mobile.js's PATCH /orders/:id and editOrder's comment): our system owns
+// the order until 2am Pacific on the delivery date, QuickBooks after — a
+// cancellation past that point has to go through QuickBooks directly, same
+// as any other change.
+async function voidOrder(req, res) {
+  const { id } = req.params;
+
+  const orderResult = await pool.query(
+    `SELECT *, (NOW() > ((delivery_date::timestamp + INTERVAL '2 hours') AT TIME ZONE 'America/Los_Angeles')) AS past_edit_cutoff
+     FROM orders WHERE id = $1`,
+    [id]
+  );
+  if (!orderResult.rows.length) return res.status(404).json({ error: 'Order not found' });
+  const order = orderResult.rows[0];
+
+  if (order.customer_id !== req.user.customer_id) return res.status(403).json({ error: 'Not your order' });
+  if (order.source !== 'mobile') return res.status(403).json({ error: 'This order can only be canceled by staff' });
+  if (order.status === 'voided') return res.status(400).json({ error: 'Order is already voided' });
+  if (order.past_edit_cutoff) return res.status(400).json({ error: 'The cancellation window for this order has closed. Contact us if you need this order canceled.' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // No-op if the reservation was already released (e.g. QB invoice already
+    // confirmed) — same guard releaseReservation itself checks.
+    await releaseReservation(client, id);
+    await client.query(`UPDATE orders SET status = 'voided' WHERE id = $1`, [id]);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  // Fire-and-forget, same as deleteOrder's QB call — the local void is real
+  // and committed regardless; the periodic reconciliation sweep's isVoided()
+  // check would eventually re-detect a QB-side void anyway, but doesn't need
+  // to un-void anything here since reconciliation only ever moves status
+  // *toward* voided, never away from it.
+  if (order.qb_invoice_id) {
+    voidQBInvoice(order.qb_invoice_id).catch(err =>
+      console.warn(`QB invoice ${order.qb_invoice_id} void failed:`, err.message)
+    );
+  }
+
+  const updated = await pool.query('SELECT * FROM orders WHERE id = $1', [id]);
+  res.json(updated.rows[0]);
+}
+
 async function getPackingReport(req, res) {
   const date = req.query.date || null;
   const result = await pool.query(
@@ -1021,4 +1080,4 @@ async function purgeOldOrders() {
   }
 }
 
-module.exports = { listOrders, getOrder, createOrder, editOrder, applyOrderEdit, deleteOrder, getPackingReport, getSalmonPullReport, syncPendingInvoices, purgeOldOrders, pushToQB, retryOrderEditPush, checkAndReserveStock };
+module.exports = { listOrders, getOrder, createOrder, editOrder, applyOrderEdit, deleteOrder, voidOrder, getPackingReport, getSalmonPullReport, syncPendingInvoices, purgeOldOrders, pushToQB, retryOrderEditPush, checkAndReserveStock };
