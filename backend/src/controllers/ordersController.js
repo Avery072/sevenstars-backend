@@ -223,11 +223,24 @@ async function checkAndReserveStock(client, items) {
 
 // Releases an order's reservation (once its invoice is confirmed in QB, or
 // when the order is deleted before that ever happens). Guarded by
-// reservation_released_at so it's safe to call more than once — QB's own
-// quantity_on_hand has already reflected the sale by the time an invoice
-// exists, so releasing here (rather than waiting for the Item webhook) avoids
-// double-counting against a webhook that hasn't arrived yet.
-async function releaseReservation(dbClient, orderId) {
+// reservation_released_at so it's safe to call more than once.
+//
+// consumeStock (true only from pushToQB's success path — see below): QB's
+// own quantity_on_hand has indeed already reflected the sale by the time the
+// invoice exists, but *our local mirror* of that column hasn't — it only
+// updates once the Item webhook arrives, which can lag by seconds or
+// minutes. Simply releasing `reserved` here and waiting for the webhook
+// opened a real overselling window: a second order placed in that gap saw
+// full stale quantity_on_hand and zero reserved, and sailed through a stock
+// check that should have caught it (reported: two same-day orders for
+// FSOFMEDIUM24 both went through against a QB quantity of 2). So on the
+// consumeStock path we decrement our local quantity_on_hand by the sold
+// amount in the same statement that releases the reservation, closing that
+// window — the eventual webhook still overwrites it with QB's authoritative
+// number, so this is just a same-transaction stopgap, not a second source of
+// truth. The delete/void call sites keep consumeStock=false: no stock was
+// actually consumed there, so only `reserved` should move.
+async function releaseReservation(dbClient, orderId, { consumeStock = false } = {}) {
   const orderResult = await dbClient.query('SELECT reservation_released_at FROM orders WHERE id = $1', [orderId]);
   if (!orderResult.rows.length || orderResult.rows[0].reservation_released_at) return;
 
@@ -240,7 +253,14 @@ async function releaseReservation(dbClient, orderId) {
     byProduct.set(item.product_id, (byProduct.get(item.product_id) || 0) + Number(item.quantity));
   }
   for (const [productId, qty] of byProduct.entries()) {
-    await dbClient.query('UPDATE products SET reserved = reserved - $1 WHERE id = $2', [qty, productId]);
+    if (consumeStock) {
+      await dbClient.query(
+        'UPDATE products SET reserved = reserved - $1, quantity_on_hand = GREATEST(quantity_on_hand - $1, 0) WHERE id = $2',
+        [qty, productId]
+      );
+    } else {
+      await dbClient.query('UPDATE products SET reserved = reserved - $1 WHERE id = $2', [qty, productId]);
+    }
   }
   await dbClient.query('UPDATE orders SET reservation_released_at = NOW() WHERE id = $1', [orderId]);
 }
@@ -293,7 +313,7 @@ async function pushToQB(order) {
   await pool.query('UPDATE orders SET qb_push_in_progress_at = NOW() WHERE id = $1', [order.id]);
   try {
     await pushToQBInner(order);
-    await releaseReservation(pool, order.id);
+    await releaseReservation(pool, order.id, { consumeStock: true });
     await clearPushFailure(order.id);
   } catch (err) {
     await recordPushFailure(order.id, err).catch(recErr =>
