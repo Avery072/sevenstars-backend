@@ -201,10 +201,12 @@ async function checkAndReserveStock(client, items) {
 
   for (const [productId, requestedQuantity] of requestedByProduct.entries()) {
     const stockResult = await client.query(
-      'SELECT description, quantity_on_hand, reserved FROM products WHERE id = $1 FOR UPDATE',
+      'SELECT description, quantity_on_hand, reserved, available_override FROM products WHERE id = $1 FOR UPDATE',
       [productId]
     );
     const product = stockResult.rows[0];
+    if (product.available_override) continue;
+
     const available = Number(product.quantity_on_hand) - Number(product.reserved);
 
     if (available < requestedQuantity) {
@@ -522,7 +524,7 @@ async function applyOrderEdit(order, newItems) {
     const lockedProducts = new Map();
     for (const productId of allProductIds) {
       const { rows } = await client.query(
-        'SELECT id, description, quantity_on_hand, reserved FROM products WHERE id = $1 FOR UPDATE',
+        'SELECT id, description, quantity_on_hand, reserved, available_override FROM products WHERE id = $1 FOR UPDATE',
         [productId]
       );
       lockedProducts.set(productId, rows[0]);
@@ -539,11 +541,13 @@ async function applyOrderEdit(order, newItems) {
       const product = lockedProducts.get(productId);
 
       if (delta > 0) {
-        const available = Number(product.quantity_on_hand) - Number(product.reserved);
-        if (available < delta) {
-          const err = new Error(`Insufficient stock for ${product.description}. Available: ${available}, Requested additional: ${delta}`);
-          err.status = 400;
-          throw err;
+        if (!product.available_override) {
+          const available = Number(product.quantity_on_hand) - Number(product.reserved);
+          if (available < delta) {
+            const err = new Error(`Insufficient stock for ${product.description}. Available: ${available}, Requested additional: ${delta}`);
+            err.status = 400;
+            throw err;
+          }
         }
         await client.query('UPDATE products SET reserved = reserved + $1 WHERE id = $2', [delta, productId]);
       } else if (!released) {
