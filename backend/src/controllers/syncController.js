@@ -173,7 +173,8 @@ async function reconcileOrders(req, res) {
 async function runReconciliation(from, to) {
   let pushed = 0, pushFailed = 0;
   const { rows: pendingOrders } = await pool.query(
-    `SELECT * FROM orders WHERE delivery_date BETWEEN $1 AND $2 AND qb_invoice_id IS NULL`,
+    `SELECT * FROM orders WHERE delivery_date BETWEEN $1 AND $2 AND qb_invoice_id IS NULL
+       AND (qb_push_in_progress_at IS NULL OR qb_push_in_progress_at < NOW() - INTERVAL '2 minutes')`,
     [from, to]
   );
   for (const order of pendingOrders) {
@@ -193,7 +194,8 @@ async function runReconciliation(from, to) {
   // leaving a failed edit-sync stuck until someone manually re-saves it.
   let editRetried = 0, editRetryFailed = 0;
   const { rows: failedEdits } = await pool.query(
-    `SELECT id FROM orders WHERE delivery_date BETWEEN $1 AND $2 AND qb_invoice_id IS NOT NULL AND push_attempts > 0`,
+    `SELECT id FROM orders WHERE delivery_date BETWEEN $1 AND $2 AND qb_invoice_id IS NOT NULL AND push_attempts > 0
+       AND (qb_push_in_progress_at IS NULL OR qb_push_in_progress_at < NOW() - INTERVAL '2 minutes')`,
     [from, to]
   );
   for (const { id } of failedEdits) {

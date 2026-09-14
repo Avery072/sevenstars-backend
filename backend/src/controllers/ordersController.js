@@ -185,6 +185,30 @@ async function createOrder(req, res) {
   }
 }
 
+// Locks a set of product rows FOR UPDATE one at a time, always in ascending
+// id order. Every code path that locks more than one product row in the same
+// transaction MUST go through this — differing lock-acquisition order between
+// two code paths is exactly what causes a deadlock (e.g. this codebase used
+// to sort in applyOrderEdit but not here, so two concurrent requests touching
+// the same two products in opposite orders could each hold one lock and wait
+// on the other, forever, until Postgres killed one with a deadlock error).
+// Deliberately one query per row rather than `WHERE id = ANY($1) ORDER BY id
+// FOR UPDATE` in a single statement — Postgres's ORDER BY there sorts the
+// *output*, not necessarily the sequence locks are acquired in during the
+// scan, so a single batched query wouldn't actually guarantee lock order.
+async function lockProductsForUpdate(client, productIds) {
+  const sortedIds = [...new Set(productIds)].sort((a, b) => a - b);
+  const locked = new Map();
+  for (const productId of sortedIds) {
+    const { rows } = await client.query(
+      'SELECT id, description, quantity_on_hand, reserved, available_override FROM products WHERE id = $1 FOR UPDATE',
+      [productId]
+    );
+    locked.set(productId, rows[0]);
+  }
+  return locked;
+}
+
 // Checks stock and claims it for an order, all under row locks in the caller's
 // transaction. products.reserved is the app's own column — quantity_on_hand is
 // synced solely from QB (see qbEntitySync.js) so the two never race on the
@@ -199,12 +223,10 @@ async function checkAndReserveStock(client, items) {
     );
   }
 
+  const lockedProducts = await lockProductsForUpdate(client, [...requestedByProduct.keys()]);
+
   for (const [productId, requestedQuantity] of requestedByProduct.entries()) {
-    const stockResult = await client.query(
-      'SELECT description, quantity_on_hand, reserved, available_override FROM products WHERE id = $1 FOR UPDATE',
-      [productId]
-    );
-    const product = stockResult.rows[0];
+    const product = lockedProducts.get(productId);
     if (product.available_override) continue;
 
     const available = Number(product.quantity_on_hand) - Number(product.reserved);
@@ -241,7 +263,13 @@ async function checkAndReserveStock(client, items) {
 // truth. The delete/void call sites keep consumeStock=false: no stock was
 // actually consumed there, so only `reserved` should move.
 async function releaseReservation(dbClient, orderId, { consumeStock = false } = {}) {
-  const orderResult = await dbClient.query('SELECT reservation_released_at FROM orders WHERE id = $1', [orderId]);
+  // FOR UPDATE: without this, two concurrent callers (e.g. two overlapping
+  // pushToQB attempts for the same order — see acquirePushLock below, which
+  // closes the main way that used to happen, but this stays as defense in
+  // depth) could both pass the "not yet released" check before either
+  // commits its own UPDATE ... reservation_released_at, and both would then
+  // decrement reserved/quantity_on_hand for the same order.
+  const orderResult = await dbClient.query('SELECT reservation_released_at FROM orders WHERE id = $1 FOR UPDATE', [orderId]);
   if (!orderResult.rows.length || orderResult.rows[0].reservation_released_at) return;
 
   const items = await dbClient.query(
@@ -299,21 +327,59 @@ function originPrivateNote(source) {
   return undefined; // qb-origin orders are already obvious to whoever entered them there
 }
 
+// Atomic per-order mutex for the QB push operation itself — qb_push_in_progress_at
+// used to be set unconditionally and never checked before proceeding, so it
+// only ever protected the *pull* side (reconcileExistingOrder's skip-guard),
+// not two pushes racing each other. This CAS (UPDATE ... WHERE ... RETURNING)
+// is the actual lock: it succeeds (returns a row) for exactly one caller at a
+// time per order. Concretely, this closes the window where the fire-and-forget
+// push on order creation could overlap with the 20-minute reconciliation
+// sweep or an admin "Sync Pending Invoices" click re-selecting the same
+// still-qb_invoice_id-NULL order — which used to let both create a separate
+// QB invoice for the same order and both double-decrement reserved/
+// quantity_on_hand via releaseReservation. The 2-minute staleness window
+// matches reconcileExistingOrder's own, and self-heals a stuck flag left by a
+// crashed process without needing a cleanup job.
+async function acquirePushLock(orderId) {
+  const { rows } = await pool.query(
+    `UPDATE orders SET qb_push_in_progress_at = NOW()
+     WHERE id = $1 AND (qb_push_in_progress_at IS NULL OR qb_push_in_progress_at < NOW() - INTERVAL '2 minutes')
+     RETURNING id`,
+    [orderId]
+  );
+  return rows.length > 0;
+}
+
+async function releasePushLock(orderId) {
+  await pool.query('UPDATE orders SET qb_push_in_progress_at = NULL WHERE id = $1', [orderId]);
+}
+
 // Thin wrapper so every caller (createOrder, the mobile order route,
 // syncPendingInvoices, reconcileOrders) gets the same failure-visibility and
 // reservation-release behavior without duplicating it at each call site.
 async function pushToQB(order) {
-  // Same guard as pushOrderEditToQB, and for the same reason — this covers
-  // creation too because a *merge* (second+ order for the same customer/day)
-  // pushes to an invoice that already exists, which reconciliation can find
-  // and touch just like an edited order can. A brand-new order has no
-  // qb_invoice_id yet, so the guard is inert for it (reconciliation can't
-  // find an order it can't match), but setting it unconditionally here is
-  // simpler than branching on whether this happens to be a merge.
-  await pool.query('UPDATE orders SET qb_push_in_progress_at = NOW() WHERE id = $1', [order.id]);
+  if (!(await acquirePushLock(order.id))) {
+    console.log(`Order ${order.id}: push already in progress elsewhere, skipping`);
+    return;
+  }
   try {
     await pushToQBInner(order);
-    await releaseReservation(pool, order.id, { consumeStock: true });
+
+    // Own transaction (rather than passing the bare pool) so releaseReservation's
+    // internal FOR UPDATE actually holds the order row locked across its
+    // check-then-act sequence — see releaseReservation's own comment.
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await releaseReservation(client, order.id, { consumeStock: true });
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
     await clearPushFailure(order.id);
   } catch (err) {
     await recordPushFailure(order.id, err).catch(recErr =>
@@ -321,7 +387,7 @@ async function pushToQB(order) {
     );
     throw err;
   } finally {
-    await pool.query('UPDATE orders SET qb_push_in_progress_at = NULL WHERE id = $1', [order.id]);
+    await releasePushLock(order.id);
   }
 }
 
@@ -497,6 +563,20 @@ async function applyOrderEdit(order, newItems) {
   try {
     await client.query('BEGIN');
 
+    // Locks the order row itself (not just the products touched below) so a
+    // second concurrent edit of the SAME order blocks here until this one
+    // commits, instead of both reading the same pre-edit order_items
+    // snapshot and computing their diff against it — previously whichever
+    // commit landed last silently won outright, with no error to either
+    // caller (see BUG_AND_CONCURRENCY_AUDIT.md §4.2). Also read fresh here
+    // rather than trusting the `order` param's reservation_released_at,
+    // which was captured by the caller before this transaction (and any
+    // lock wait) even began.
+    const lockedOrder = await client.query(
+      'SELECT reservation_released_at FROM orders WHERE id = $1 FOR UPDATE',
+      [order.id]
+    );
+
     const currentResult = await client.query(
       `SELECT id, product_id, quantity, unit_price, qb_line_id
        FROM order_items WHERE order_id = $1 AND status = 'active'
@@ -536,21 +616,14 @@ async function applyOrderEdit(order, newItems) {
       }
     }
 
-    // Lock every product this edit touches (union of current + new), in a
-    // stable ascending order — matches checkAndReserveStock's existing
-    // locking pattern, avoiding new deadlock risk between concurrent
-    // edits/creates touching overlapping products.
-    const allProductIds = [...new Set([...currentByProduct.keys(), ...newByProduct.keys()])].sort((a, b) => a - b);
-    const lockedProducts = new Map();
-    for (const productId of allProductIds) {
-      const { rows } = await client.query(
-        'SELECT id, description, quantity_on_hand, reserved, available_override FROM products WHERE id = $1 FOR UPDATE',
-        [productId]
-      );
-      lockedProducts.set(productId, rows[0]);
-    }
+    // Lock every product this edit touches (union of current + new) via the
+    // same helper checkAndReserveStock uses, so lock-acquisition order can
+    // never drift apart between the two again (see lockProductsForUpdate's
+    // own comment on the deadlock this guards against).
+    const allProductIds = [...currentByProduct.keys(), ...newByProduct.keys()];
+    const lockedProducts = await lockProductsForUpdate(client, allProductIds);
 
-    const released = !!order.reservation_released_at;
+    const released = !!lockedOrder.rows[0].reservation_released_at;
 
     for (const productId of allProductIds) {
       const before = (currentByProduct.get(productId) || []).reduce((sum, r) => sum + Number(r.quantity), 0);
@@ -651,8 +724,17 @@ async function applyOrderEdit(order, newItems) {
   let qbSynced = true;
   if (order.qb_invoice_id) {
     try {
-      await pushOrderEditToQB(order.id);
-      await clearPushFailure(order.id);
+      const pushed = await pushOrderEditToQB(order.id);
+      if (pushed) {
+        await clearPushFailure(order.id);
+      } else {
+        // Another push (e.g. the reconciliation sweep retrying an earlier
+        // failure on this same order) currently holds the lock. The durable
+        // qb_dirty/qb_line_id markers this edit just wrote are untouched, so
+        // nothing is lost — it'll go out on the next retry — but it hasn't
+        // synced *yet*, so say so honestly rather than reporting success.
+        qbSynced = false;
+      }
     } catch (err) {
       qbSynced = false;
       const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
@@ -682,7 +764,8 @@ async function applyOrderEdit(order, newItems) {
 // periodic reconciliation job, same failure-visibility pattern as pushToQB.
 async function retryOrderEditPush(orderId) {
   try {
-    await pushOrderEditToQB(orderId);
+    const pushed = await pushOrderEditToQB(orderId);
+    if (!pushed) return false; // lock held elsewhere right now — next sweep will catch it
     await clearPushFailure(orderId);
     return true;
   } catch (err) {
@@ -731,70 +814,77 @@ function buildQBLine(item) {
 // means this also works correctly as a retry, on a fresh process, after a
 // failed push — see retryOrderEditPush.
 //
-// Guarded by orders.qb_push_in_progress_at against reconciliation
-// interleaving mid-push: reconcileExistingOrder skips an order with this set
-// recently, so it can't grab QB's pre-push state and undo what's about to
-// land. Cleared in `finally` regardless of outcome — the guard only needs to
-// cover the actual QB round-trip, not the retry cadence.
+// Guarded by acquirePushLock (the same per-order mutex pushToQB uses) against
+// both reconciliation AND another concurrent edit-push interleaving: the lock
+// now wraps the *entire* read-modify-write (reading which lines are
+// dirty/removed/new, through writing back qb_dirty/qb_line_id), not just the
+// QB API round-trip — reading those durable markers without the lock held
+// was the actual gap: two overlapping calls could both read the same
+// not-yet-cleared qb_dirty rows and both patch them into QB. Returns false
+// (rather than throwing) when the lock is already held elsewhere, so a
+// caller can distinguish "nothing needed pushing" / "pushed" from "couldn't
+// even try right now" — see applyOrderEdit and retryOrderEditPush.
 async function pushOrderEditToQB(orderId) {
   const orderResult = await pool.query('SELECT qb_invoice_id FROM orders WHERE id = $1', [orderId]);
   const qbInvoiceId = orderResult.rows[0]?.qb_invoice_id;
-  if (!qbInvoiceId) return;
+  if (!qbInvoiceId) return true; // nothing to push
 
-  const [removedResult, dirtyResult, newResult] = await Promise.all([
-    pool.query(
-      `SELECT qb_line_id FROM order_items WHERE order_id = $1 AND status = 'removed' AND qb_line_id IS NOT NULL`,
-      [orderId]
-    ),
-    pool.query(
-      `SELECT oi.id, oi.qb_line_id, oi.quantity, oi.unit_price, oi.notes, p.qb_item_id, p.description
-       FROM order_items oi JOIN products p ON p.id = oi.product_id
-       WHERE oi.order_id = $1 AND oi.status = 'active' AND oi.qb_dirty = TRUE AND oi.qb_line_id IS NOT NULL`,
-      [orderId]
-    ),
-    pool.query(
-      `SELECT oi.id, oi.quantity, oi.unit_price, oi.notes, p.qb_item_id, p.description
-       FROM order_items oi JOIN products p ON p.id = oi.product_id
-       WHERE oi.order_id = $1 AND oi.status = 'active' AND oi.qb_line_id IS NULL
-       ORDER BY oi.id ASC`,
-      [orderId]
-    ),
-  ]);
+  if (!(await acquirePushLock(orderId))) return false;
 
-  const removeLineIds = removedResult.rows.map(r => r.qb_line_id);
-  const dirtyRows = dirtyResult.rows.filter(r => r.qb_item_id);
-  const newRows = newResult.rows.filter(r => r.qb_item_id);
-  const skipped = dirtyResult.rows.length - dirtyRows.length + (newResult.rows.length - newRows.length);
-  if (skipped) {
-    console.warn(`Order ${orderId}: skipping ${skipped} item(s) with no qb_item_id on QB update`);
-  }
-
-  const updateLines = dirtyRows.map(buildQBLine);
-  const addLines = newRows.map(buildQBLine);
-
-  if (!removeLineIds.length && !updateLines.length && !addLines.length) return; // nothing pending
-
-  await pool.query('UPDATE orders SET qb_push_in_progress_at = NOW() WHERE id = $1', [orderId]);
-  let updatedInvoice;
   try {
-    updatedInvoice = await patchQBInvoiceLines(qbInvoiceId, { removeLineIds, updateLines, addLines });
-  } finally {
-    await pool.query('UPDATE orders SET qb_push_in_progress_at = NULL WHERE id = $1', [orderId]);
-  }
+    const [removedResult, dirtyResult, newResult] = await Promise.all([
+      pool.query(
+        `SELECT qb_line_id FROM order_items WHERE order_id = $1 AND status = 'removed' AND qb_line_id IS NOT NULL`,
+        [orderId]
+      ),
+      pool.query(
+        `SELECT oi.id, oi.qb_line_id, oi.quantity, oi.unit_price, oi.notes, p.qb_item_id, p.description
+         FROM order_items oi JOIN products p ON p.id = oi.product_id
+         WHERE oi.order_id = $1 AND oi.status = 'active' AND oi.qb_dirty = TRUE AND oi.qb_line_id IS NOT NULL`,
+        [orderId]
+      ),
+      pool.query(
+        `SELECT oi.id, oi.quantity, oi.unit_price, oi.notes, p.qb_item_id, p.description
+         FROM order_items oi JOIN products p ON p.id = oi.product_id
+         WHERE oi.order_id = $1 AND oi.status = 'active' AND oi.qb_line_id IS NULL
+         ORDER BY oi.id ASC`,
+        [orderId]
+      ),
+    ]);
 
-  if (dirtyRows.length) {
-    await pool.query(
-      `UPDATE order_items SET qb_dirty = FALSE WHERE id = ANY($1)`,
-      [dirtyRows.map(r => r.id)]
-    );
-  }
-
-  if (newRows.length) {
-    const respLines = (updatedInvoice.Line || []).filter(l => l.DetailType === 'SalesItemLineDetail');
-    const newRespLines = respLines.slice(-newRows.length);
-    for (let i = 0; i < newRows.length && i < newRespLines.length; i++) {
-      await pool.query('UPDATE order_items SET qb_line_id = $1 WHERE id = $2', [newRespLines[i].Id, newRows[i].id]);
+    const removeLineIds = removedResult.rows.map(r => r.qb_line_id);
+    const dirtyRows = dirtyResult.rows.filter(r => r.qb_item_id);
+    const newRows = newResult.rows.filter(r => r.qb_item_id);
+    const skipped = dirtyResult.rows.length - dirtyRows.length + (newResult.rows.length - newRows.length);
+    if (skipped) {
+      console.warn(`Order ${orderId}: skipping ${skipped} item(s) with no qb_item_id on QB update`);
     }
+
+    const updateLines = dirtyRows.map(buildQBLine);
+    const addLines = newRows.map(buildQBLine);
+
+    if (!removeLineIds.length && !updateLines.length && !addLines.length) return true; // nothing pending
+
+    const updatedInvoice = await patchQBInvoiceLines(qbInvoiceId, { removeLineIds, updateLines, addLines });
+
+    if (dirtyRows.length) {
+      await pool.query(
+        `UPDATE order_items SET qb_dirty = FALSE WHERE id = ANY($1)`,
+        [dirtyRows.map(r => r.id)]
+      );
+    }
+
+    if (newRows.length) {
+      const respLines = (updatedInvoice.Line || []).filter(l => l.DetailType === 'SalesItemLineDetail');
+      const newRespLines = respLines.slice(-newRows.length);
+      for (let i = 0; i < newRows.length && i < newRespLines.length; i++) {
+        await pool.query('UPDATE order_items SET qb_line_id = $1 WHERE id = $2', [newRespLines[i].Id, newRows[i].id]);
+      }
+    }
+
+    return true;
+  } finally {
+    await releasePushLock(orderId);
   }
 }
 
@@ -1072,6 +1162,7 @@ async function syncPendingInvoices(req, res) {
      FROM orders o
      JOIN order_items oi ON oi.order_id = o.id
      WHERE o.qb_invoice_id IS NULL AND oi.status = 'active'
+       AND (o.qb_push_in_progress_at IS NULL OR o.qb_push_in_progress_at < NOW() - INTERVAL '2 minutes')
      ORDER BY o.id`
   );
 
