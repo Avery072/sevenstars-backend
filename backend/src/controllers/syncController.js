@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { isValidISODate } = require('../utils/dateValidation');
 const { queryQBAll } = require('../middleware/qbSync');
 const { processInvoice } = require('./webhooksController');
 const { getQBClient } = require('../middleware/qbSync');
@@ -90,6 +91,9 @@ async function upsertCustomers(customers) {
 async function syncInvoicesFromQB(req, res) {
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   const sinceStr = req.query.date || today;
+  if (req.query.date && !isValidISODate(sinceStr)) {
+    return res.status(400).json({ error: 'date must be a valid YYYY-MM-DD date' });
+  }
 
   let invoices;
   try {
@@ -159,6 +163,9 @@ async function reconcileOrders(req, res) {
   const { from, to } = req.query;
   if (!from || !to) {
     return res.status(400).json({ error: 'from and to query params are required (YYYY-MM-DD)' });
+  }
+  if (!isValidISODate(from) || !isValidISODate(to)) {
+    return res.status(400).json({ error: 'from and to must be valid YYYY-MM-DD dates' });
   }
   const result = await runReconciliation(from, to);
   if (result.error) return res.status(result.status).json({ error: result.error });

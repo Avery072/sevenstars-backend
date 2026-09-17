@@ -1,5 +1,6 @@
 const PDFDocument = require('pdfkit');
 const pool = require('../config/db');
+const { isValidISODate } = require('../utils/dateValidation');
 
 const SQL = `SELECT
   p.id AS product_id,
@@ -23,19 +24,6 @@ function currentISODate() {
   const month = String(now.getMonth() + 1).padStart(2, '0');
   const day = String(now.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
-}
-
-function isValidISODate(date) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return false;
-
-  const parsed = new Date(`${date}T00:00:00`);
-  if (Number.isNaN(parsed.getTime())) return false;
-
-  return date === [
-    parsed.getFullYear(),
-    String(parsed.getMonth() + 1).padStart(2, '0'),
-    String(parsed.getDate()).padStart(2, '0'),
-  ].join('-');
 }
 
 function reportDate(date) {
