@@ -18,7 +18,7 @@ const webhookRoutes = require('./routes/webhooks');
 const adminRoutes = require('./routes/admin');
 const mobileRoutes = require('./routes/mobile');
 const { purgeOldOrders } = require('./controllers/ordersController');
-const { runReconciliation } = require('./controllers/syncController');
+const { runReconciliation, refreshItemsFromQB } = require('./controllers/syncController');
 
 const app = express();
 
@@ -102,6 +102,17 @@ function runAutoReconcile() {
     .catch(err => console.error(`Auto-reconcile (${from} to ${to}) threw:`, err.message));
 }
 
+// QB doesn't reliably send an Item webhook when an invoice (rather than a
+// direct item edit) moves QtyOnHand, so quantities are also re-read on the
+// same cadence as the order sweep — one paged QB query per run.
+function runItemRefresh() {
+  refreshItemsFromQB()
+    .then(({ created, updated }) => {
+      if (created || updated) console.log(`Item refresh: ${created} created, ${updated} updated`);
+    })
+    .catch(err => console.error('Item refresh failed:', err.message));
+}
+
 // Only listen (and run the background jobs) when this file is the actual
 // entry point — requiring it from tests should just build the app, no side effects.
 if (require.main === module) {
@@ -112,6 +123,8 @@ if (require.main === module) {
     setInterval(runPurge, 24 * 60 * 60 * 1000);
     runAutoReconcile();
     setInterval(runAutoReconcile, 20 * 60 * 1000);
+    runItemRefresh();
+    setInterval(runItemRefresh, 20 * 60 * 1000);
   });
 }
 

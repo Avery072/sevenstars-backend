@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const pool = require('../config/db');
-const { fetchQBItem, fetchQBCustomer, fetchQBInvoice } = require('../middleware/qbSync');
+const { fetchQBItem, fetchQBItemsByIds, fetchQBCustomer, fetchQBInvoice } = require('../middleware/qbSync');
 const { upsertQBItem } = require('../services/qbEntitySync');
 
 // QB sends a signature in the intuit-signature header; verify before processing.
@@ -310,15 +310,51 @@ async function processInvoice(invoice) {
   }
 }
 
+// An invoice being created/edited/deleted in QB moves QtyOnHand for the
+// items on it, but QB doesn't reliably send a separate Item event for that —
+// so re-read those items here rather than leaving quantity_on_hand stale
+// until the next manual sync. Best-effort: a failure here must never undo or
+// block the order sync that just succeeded (the periodic full item refresh
+// in app.js picks up anything this misses, e.g. an item whose line was
+// removed from the invoice entirely).
+async function refreshItemQuantities(qbItemIds) {
+  try {
+    const items = await fetchQBItemsByIds(qbItemIds);
+    for (const item of items) {
+      if (item.Type === 'Category' || item.Type === 'Group') continue;
+      const result = await upsertQBItem(item);
+      if (result?.changes?.quantity_on_hand) {
+        const { from, to } = result.changes.quantity_on_hand;
+        console.log(`QB invoice sync — "${result.sku}" quantity_on_hand ${from} -> ${to}`);
+      }
+    }
+  } catch (err) {
+    console.error('Item quantity refresh after invoice sync failed:', err.message);
+  }
+}
+
 async function syncInvoice(qbInvoiceId, operation) {
   if (operation === 'Delete') {
     await pool.query('UPDATE orders SET status = $1 WHERE qb_invoice_id = $2', ['voided', qbInvoiceId]);
     console.log(`QB invoice ${qbInvoiceId} voided in QB — order marked voided`);
+    // The invoice is gone from QB, so its lines come from our own copy.
+    const { rows } = await pool.query(
+      `SELECT DISTINCT p.qb_item_id
+       FROM orders o
+       JOIN order_items oi ON oi.order_id = o.id
+       JOIN products p ON p.id = oi.product_id
+       WHERE o.qb_invoice_id = $1 AND p.qb_item_id IS NOT NULL`,
+      [qbInvoiceId]
+    );
+    await refreshItemQuantities(rows.map(r => r.qb_item_id));
     return;
   }
   const invoice = await fetchQBInvoice(qbInvoiceId);
   if (!invoice) return;
   await processInvoice(invoice);
+  await refreshItemQuantities(
+    (invoice.Line || []).map(l => l.SalesItemLineDetail?.ItemRef?.value)
+  );
 }
 
 async function syncCustomer(qbCustomerId, operation) {

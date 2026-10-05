@@ -16,10 +16,15 @@
  *    (salmon_cut, skin_off, scale, pbo, hg, buys_salmon, language_pref,
  *    ordering_method, resale_certificate_number, notes, address). These are
  *    backed up before the wipe and re-attached afterward, matched by
- *    qb_customer_id — a local customer that was never linked to QB (no
- *    qb_customer_id) is a test/local-only record and is deliberately left
- *    out: nothing in the fresh QB pull can match it, so its prefs are not
- *    reattached to anything (they still exist in the backup file).
+ *    company_name (case/whitespace-insensitive) — NOT by qb_customer_id:
+ *    this script is run when cutting over to a different QuickBooks company,
+ *    which assigns its own customer Ids, so an old Id and the same new Id
+ *    can be two unrelated businesses. A name that appears more than once on
+ *    either side is ambiguous and is skipped rather than guessed at; skipped
+ *    and unmatched names are printed at the end for manual follow-up. A
+ *    local customer that was never linked to QB (no qb_customer_id) is a
+ *    test/local-only record and is deliberately left out (it still exists
+ *    in the backup file).
  *  - orders/order_items are rebuilt from only the last LOOKBACK_DAYS..
  *    LOOKAHEAD_DAYS of QuickBooks invoice activity (TxnDate-based), not full
  *    history — this matches the app's own 31-day rolling purge policy, which
@@ -102,40 +107,64 @@ async function backupTables() {
   return { file, backup };
 }
 
-// Keyed by qb_customer_id — a backed-up customer with no qb_customer_id
-// (never linked to QB) has nothing to match against post-wipe and is
-// intentionally dropped, per the "only re-attach for matching customers"
-// decision above.
+function nameKey(name) {
+  return (name || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+// Keyed by normalized company_name — see header comment for why not
+// qb_customer_id. A backed-up customer with no qb_customer_id (never linked
+// to QB) is intentionally dropped, per the "only re-attach for matching
+// customers" decision above. A name seen twice maps to null (ambiguous).
 function buildPreservationMap(customersBackup) {
   const map = new Map();
   let skippedUnlinked = 0;
   for (const c of customersBackup) {
     if (!c.qb_customer_id) { skippedUnlinked++; continue; }
+    const key = nameKey(c.company_name);
+    if (!key) continue;
+    if (map.has(key)) { map.set(key, null); continue; }
     const fields = {};
-    for (const key of LOCAL_ONLY_CUSTOMER_FIELDS) fields[key] = c[key];
-    map.set(c.qb_customer_id, fields);
+    for (const f of LOCAL_ONLY_CUSTOMER_FIELDS) fields[f] = c[f];
+    map.set(key, { name: c.company_name, fields });
   }
-  return { map, skippedUnlinked };
+  const ambiguous = [...map.values()].filter(v => v === null).length;
+  return { map, skippedUnlinked, ambiguous };
 }
 
 async function reattachPreservedFields(map) {
   const { rows: freshCustomers } = await pool.query(
-    'SELECT id, qb_customer_id FROM customers WHERE qb_customer_id IS NOT NULL'
+    'SELECT id, company_name FROM customers WHERE qb_customer_id IS NOT NULL'
   );
 
-  let matched = 0;
+  const freshByName = new Map();
   for (const row of freshCustomers) {
-    const preserved = map.get(row.qb_customer_id);
-    if (!preserved) continue;
+    const key = nameKey(row.company_name);
+    if (!freshByName.has(key)) freshByName.set(key, []);
+    freshByName.get(key).push(row);
+  }
+
+  let matched = 0;
+  const ambiguous = [];
+  const used = new Set();
+  for (const [key, rows] of freshByName) {
+    if (!map.has(key)) continue;
+    const preserved = map.get(key);
+    used.add(key);
+    if (preserved === null || rows.length > 1) { ambiguous.push(rows[0].company_name); continue; }
 
     const sets = LOCAL_ONLY_CUSTOMER_FIELDS.map((f, i) => `${f} = $${i + 1}`);
-    const values = LOCAL_ONLY_CUSTOMER_FIELDS.map(f => preserved[f]);
-    values.push(row.id);
+    const values = LOCAL_ONLY_CUSTOMER_FIELDS.map(f => preserved.fields[f]);
+    values.push(rows[0].id);
     await pool.query(`UPDATE customers SET ${sets.join(', ')} WHERE id = $${values.length}`, values);
     matched++;
   }
 
-  return { matched, totalFresh: freshCustomers.length };
+  // Backed-up customers whose name doesn't exist in the new QB company at all.
+  const unmatched = [...map.entries()]
+    .filter(([key, v]) => v !== null && !used.has(key))
+    .map(([, v]) => v.name);
+
+  return { matched, totalFresh: freshCustomers.length, ambiguous, unmatched };
 }
 
 // Same loop shape as syncController.js's upsertItems/upsertCustomers — kept
@@ -173,8 +202,9 @@ async function main() {
   for (const table of WIPE_TABLES) console.log(`  ${table}: ${backup[table].length} row(s)`);
   console.log();
 
-  const { map: preservationMap, skippedUnlinked } = buildPreservationMap(backup.customers);
-  console.log(`Preservable customer records (linked to a QB customer): ${preservationMap.size}`);
+  const { map: preservationMap, skippedUnlinked, ambiguous: ambiguousBackup } = buildPreservationMap(backup.customers);
+  console.log(`Preservable customer records (linked to a QB customer, matched by company name): ${preservationMap.size - ambiguousBackup}`);
+  if (ambiguousBackup) console.log(`Duplicate company names in the backup (ambiguous, will not be reattached): ${ambiguousBackup}`);
   console.log(`Local-only/test customer records (no qb_customer_id, will not be reattached): ${skippedUnlinked}\n`);
 
   const from = addDays(new Date(), -LOOKBACK_DAYS);
@@ -206,7 +236,16 @@ async function main() {
 
   console.log('Re-attaching preserved customer preferences...');
   const reattach = await reattachPreservedFields(preservationMap);
-  console.log(`  ${reattach.matched} of ${reattach.totalFresh} freshly-pulled customers matched a backed-up record and were restored.\n`);
+  console.log(`  ${reattach.matched} of ${reattach.totalFresh} freshly-pulled customers matched a backed-up record by company name and were restored.`);
+  if (reattach.ambiguous.length) {
+    console.log(`  ${reattach.ambiguous.length} skipped — duplicate company name, fix by hand from the backup:`);
+    for (const name of reattach.ambiguous) console.log(`    - ${name}`);
+  }
+  if (reattach.unmatched.length) {
+    console.log(`  ${reattach.unmatched.length} backed-up customer(s) have no customer with the same name in QuickBooks — prefs not restored:`);
+    for (const name of reattach.unmatched) console.log(`    - ${name}`);
+  }
+  console.log();
 
   console.log('Pulling recent orders (invoices) from QuickBooks...');
   const orderResult = await runReconciliation(ymd(from), ymd(to));

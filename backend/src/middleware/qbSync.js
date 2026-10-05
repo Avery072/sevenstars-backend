@@ -46,6 +46,27 @@ async function fetchQBItem(itemId) {
   }
 }
 
+// Fetches several items in as few calls as possible (one query per 100 Ids)
+// rather than one GET per item — used to refresh the quantities of every
+// item on an invoice without burning through QB's per-minute rate limit.
+async function fetchQBItemsByIds(itemIds) {
+  const ids = [...new Set(itemIds.filter(Boolean).map(String))].filter(id => /^\d+$/.test(id));
+  try {
+    const client = await getQBClient();
+    const results = [];
+    for (let i = 0; i < ids.length; i += 100) {
+      const chunk = ids.slice(i, i + 100).map(id => `'${id}'`).join(', ');
+      const query = `SELECT * FROM Item WHERE Id IN (${chunk})`;
+      const { data } = await client.get(`/query?query=${encodeURIComponent(query)}&minorversion=65`);
+      results.push(...(data?.QueryResponse?.Item || []));
+    }
+    return results;
+  } catch (err) {
+    logQBError('QB item batch fetch', err);
+    throw err;
+  }
+}
+
 async function fetchQBCustomer(customerId) {
   try {
     const client = await getQBClient();
@@ -376,6 +397,7 @@ module.exports = {
   getQBClient,
   queryQBAll,
   fetchQBItem,
+  fetchQBItemsByIds,
   fetchQBCustomer,
   fetchQBInvoice,
   createQBInvoice,

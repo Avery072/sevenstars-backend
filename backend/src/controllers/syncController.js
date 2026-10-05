@@ -68,6 +68,14 @@ async function upsertItems(items) {
   return { created, updated, unchanged, changed };
 }
 
+// Re-reads every QB item (one paged query) and upserts it — the scheduled
+// backstop that keeps quantity_on_hand following QB even when a webhook is
+// missed or never sent. Same upsert path as the manual "Sync from QB".
+async function refreshItemsFromQB() {
+  const items = await queryQBAll('Item');
+  return upsertItems(items);
+}
+
 async function upsertCustomers(customers) {
   let created = 0, updated = 0, unchanged = 0;
   const changed = [];
@@ -249,4 +257,4 @@ async function runReconciliation(from, to) {
   };
 }
 
-module.exports = { syncFromQB, syncInvoicesFromQB, reconcileOrders, runReconciliation };
+module.exports = { syncFromQB, syncInvoicesFromQB, reconcileOrders, runReconciliation, refreshItemsFromQB };
