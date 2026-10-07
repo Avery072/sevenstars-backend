@@ -1,5 +1,5 @@
 const pool = require('../config/db');
-const { createQBInvoice, appendToQBInvoice, patchQBInvoiceLines, createQBCustomer, getQBClient, deleteQBInvoice, voidQBInvoice, isDuplicateDocNumberError } = require('../middleware/qbSync');
+const { createQBInvoice, appendToQBInvoice, patchQBInvoiceLines, createQBCustomer, fetchQBCustomer, getQBClient, deleteQBInvoice, voidQBInvoice, isDuplicateDocNumberError } = require('../middleware/qbSync');
 
 async function nextQBDocNumber() {
   const { rows } = await pool.query("SELECT nextval('qb_invoice_doc_number_seq')::text AS n");
@@ -420,6 +420,27 @@ async function unpushedOrderLines(orderId) {
     .map(item => buildQBLine({ ...item, unit_price: item.price ?? item.unit_price }));
 }
 
+// When an invoice is created without a BillAddr, QBO fills one in itself
+// with the customer's name as Line1 — and the invoice form then prints the
+// name followed by that block, so the name shows twice. Sending the
+// customer's own structured billing address (which has no name line) makes
+// API-created invoices print like ones entered in QuickBooks. Best-effort:
+// if the lookup fails the invoice still goes out, just with QBO's default.
+async function invoiceBillingFields(qbCustomerId) {
+  try {
+    const qbCustomer = await fetchQBCustomer(qbCustomerId);
+    const { Id, ...billAddr } = qbCustomer?.BillAddr || {};
+    const email = qbCustomer?.PrimaryEmailAddr?.Address;
+    return {
+      ...(Object.keys(billAddr).length ? { BillAddr: billAddr } : {}),
+      ...(email ? { BillEmail: { Address: email } } : {}),
+    };
+  } catch (err) {
+    console.warn(`QB customer ${qbCustomerId} billing lookup failed, invoice will use QBO's default bill-to: ${err.message}`);
+    return {};
+  }
+}
+
 async function pushToQBInner(order) {
   const custResult = await pool.query(
     `SELECT c.qb_customer_id, c.company_name, c.first_name, c.last_name, c.phone,
@@ -500,6 +521,7 @@ async function pushToQBInner(order) {
         CustomerRef: { value: qbCustomerId },
         TxnDate: order.delivery_date,
         Line: lines,
+        ...(await invoiceBillingFields(qbCustomerId)),
         ...(order.notes ? { CustomerMemo: { value: order.notes } } : {}),
         ...(privateNote ? { PrivateNote: privateNote } : {}),
       };
@@ -514,6 +536,7 @@ async function pushToQBInner(order) {
       CustomerRef: { value: qbCustomerId },
       TxnDate: order.delivery_date,
       Line: lines,
+      ...(await invoiceBillingFields(qbCustomerId)),
       ...(order.notes ? { CustomerMemo: { value: order.notes } } : {}),
       ...(privateNote ? { PrivateNote: privateNote } : {}),
     };
