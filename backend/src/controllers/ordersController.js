@@ -420,23 +420,53 @@ async function unpushedOrderLines(orderId) {
     .map(item => buildQBLine({ ...item, unit_price: item.price ?? item.unit_price }));
 }
 
-// When an invoice is created without a BillAddr, QBO fills one in itself
-// with the customer's name as Line1 — and the invoice form then prints the
-// name followed by that block, so the name shows twice. Sending the
-// customer's own structured billing address (which has no name line) makes
-// API-created invoices print like ones entered in QuickBooks. Best-effort:
-// if the lookup fails the invoice still goes out, just with QBO's default.
+// Strips the parts of a QB address that the invoice form already prints on
+// its own, so they don't show twice: a line that is just the customer's name
+// (the form prints the name above the address block), and a free-form
+// "CITY, ST ZIP" line when the same city/state/zip are also present as
+// structured fields (the form prints those as its own last line). Remaining
+// lines are renumbered from Line1. Returns null for an empty address.
+function cleanInvoiceAddress(addr, names) {
+  if (!addr) return null;
+  const norm = (v) => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const skip = new Set(names.map(norm).filter(Boolean));
+  const cityLine = norm(`${addr.City || ''}${addr.CountrySubDivisionCode || ''}${addr.PostalCode || ''}`);
+  if (addr.City && cityLine) skip.add(cityLine);
+
+  const lines = ['Line1', 'Line2', 'Line3', 'Line4', 'Line5']
+    .map(k => addr[k])
+    .filter(v => v && String(v).trim() && !skip.has(norm(v)));
+
+  const out = {};
+  lines.forEach((v, i) => { out[`Line${i + 1}`] = v; });
+  for (const k of ['City', 'CountrySubDivisionCode', 'PostalCode', 'Country']) {
+    if (addr[k]) out[k] = addr[k];
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+// When an invoice is created without a BillAddr/ShipAddr, QBO fills them in
+// itself with the customer's name as Line1 — and the invoice form then
+// prints the name followed by that block, so the name shows twice (and, for
+// addresses stored with a free-form city line, the city line too). Sending
+// the customer's own addresses, cleaned of those repeats, makes API-created
+// invoices print like ones entered in QuickBooks. Ship-to falls back to the
+// billing address, as the QuickBooks UI does. Best-effort: if the lookup
+// fails the invoice still goes out, just with QBO's defaults.
 async function invoiceBillingFields(qbCustomerId) {
   try {
     const qbCustomer = await fetchQBCustomer(qbCustomerId);
-    const { Id, ...billAddr } = qbCustomer?.BillAddr || {};
+    const names = [qbCustomer?.DisplayName, qbCustomer?.CompanyName, qbCustomer?.PrintOnCheckName, qbCustomer?.FullyQualifiedName];
+    const billAddr = cleanInvoiceAddress(qbCustomer?.BillAddr, names);
+    const shipAddr = cleanInvoiceAddress(qbCustomer?.ShipAddr, names) || billAddr;
     const email = qbCustomer?.PrimaryEmailAddr?.Address;
     return {
-      ...(Object.keys(billAddr).length ? { BillAddr: billAddr } : {}),
+      ...(billAddr ? { BillAddr: billAddr } : {}),
+      ...(shipAddr ? { ShipAddr: shipAddr } : {}),
       ...(email ? { BillEmail: { Address: email } } : {}),
     };
   } catch (err) {
-    console.warn(`QB customer ${qbCustomerId} billing lookup failed, invoice will use QBO's default bill-to: ${err.message}`);
+    console.warn(`QB customer ${qbCustomerId} address lookup failed, invoice will use QBO's default bill-to/ship-to: ${err.message}`);
     return {};
   }
 }
