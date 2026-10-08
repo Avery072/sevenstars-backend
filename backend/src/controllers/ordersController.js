@@ -445,6 +445,19 @@ function cleanInvoiceAddress(addr, names) {
   return Object.keys(out).length ? out : null;
 }
 
+// customers.address is one free-text field (mobile signup / admin "new
+// customer"). QuickBooks wants a structured address, so split off a trailing
+// ", City, ST 98101" when the text clearly ends in one; anything else goes
+// in as a single line rather than being guessed apart. Returns undefined
+// for an empty address so the field is simply omitted.
+function qbAddressFromText(text) {
+  const t = String(text || '').trim().replace(/\s+/g, ' ');
+  if (!t) return undefined;
+  const m = t.match(/^(.+?),\s*([^,\d]+?),?\s+([A-Za-z]{2})\.?,?\s+(\d{5}(?:-\d{4})?)$/);
+  if (!m) return { Line1: t };
+  return { Line1: m[1].trim(), City: m[2].trim(), CountrySubDivisionCode: m[3].toUpperCase(), PostalCode: m[4] };
+}
+
 // When an invoice is created without a BillAddr/ShipAddr, QBO fills them in
 // itself with the customer's name as Line1 — and the invoice form then
 // prints the name followed by that block, so the name shows twice (and, for
@@ -473,7 +486,7 @@ async function invoiceBillingFields(qbCustomerId) {
 
 async function pushToQBInner(order) {
   const custResult = await pool.query(
-    `SELECT c.qb_customer_id, c.company_name, c.first_name, c.last_name, c.phone,
+    `SELECT c.qb_customer_id, c.company_name, c.first_name, c.last_name, c.phone, c.address,
             COALESCE(c.email, mu.email) AS email
      FROM customers c
      LEFT JOIN mobile_users mu ON mu.customer_id = c.id
@@ -504,6 +517,8 @@ async function pushToQBInner(order) {
     }
 
     if (!qbCustomerId) {
+      // The app only collects one address, so it serves as both bill-to and ship-to.
+      const address = qbAddressFromText(customer.address);
       const qbCustomer = await createQBCustomer({
         DisplayName: displayName,
         CompanyName: customer.company_name || null,
@@ -511,6 +526,8 @@ async function pushToQBInner(order) {
         FamilyName: customer.last_name || null,
         PrimaryEmailAddr: customer.email ? { Address: customer.email } : undefined,
         PrimaryPhone: customer.phone ? { FreeFormNumber: customer.phone } : undefined,
+        BillAddr: address,
+        ShipAddr: address,
       });
       qbCustomerId = qbCustomer.Id;
       console.log(`Created QB customer ${qbCustomerId} for local customer ${order.customer_id}`);
