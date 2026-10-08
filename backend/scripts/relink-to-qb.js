@@ -21,14 +21,16 @@
  * field (show_price, available_override, image_url, salmon prefs, ...) are
  * left alone. A product/customer with no match in QuickBooks ends up
  * unlinked (its old Id means nothing in this company) and is listed.
- * A name/SKU that appears more than once on either side is ambiguous and is
- * left unlinked rather than guessed at.
+ * Where the same customer exists more than once locally, exactly one copy is
+ * linked (the one the QB sync already created for this company, if any) and
+ * the others are unlinked — duplicates are NOT merged or deleted here.
  *
  * Safety:
  *  - Without --yes it only prints what would change.
  *  - The old links are copied to tables in Postgres (products_qb_link_backup_*,
  *    customers_qb_link_backup_*) before anything is changed.
  *  - The relink itself runs in one transaction.
+ *  - A link that is already correct for this company is never removed.
  *  - If the existing links already line up with this company it refuses to
  *    run (nothing to repair) unless --force is given.
  *
@@ -68,13 +70,25 @@ function groupBy(rows, keyOf) {
   return map;
 }
 
-// Returns { links: [{ localId, qbId }], ambiguous: [label], localUnmatched: [label],
-//           qbUnmatched: [label], alreadyCorrect: n }
+// Returns { links: [{ localId, qbId }], duplicates: [label], ambiguous: [label],
+//           localUnmatched: [label], qbUnmatched: [key], alreadyCorrect: n }
+//
+// Every local row NOT in `links` ends up unlinked. Rules per name/SKU:
+//  - one local row, one QB record        -> link them.
+//  - several local rows, one QB record   -> (duplicates) link exactly one: the
+//    row already pointing at that QB Id if there is one (it is the copy the
+//    QB sync created for this company), otherwise the oldest row. The other
+//    copies are unlinked — their Id belongs to another company. Nothing is
+//    merged or deleted here.
+//  - several QB records with that name   -> (ambiguous) can't tell which is
+//    which: rows already pointing at one of those Ids keep their link, the
+//    rest are unlinked.
 function planRelink(localRows, qbRows, { localKey, qbKey, localLink, label }) {
   const localByKey = groupBy(localRows, localKey);
   const qbByKey = groupBy(qbRows, qbKey);
 
   const links = [];
+  const duplicates = [];
   const ambiguous = [];
   const localUnmatched = [];
   let alreadyCorrect = 0;
@@ -85,13 +99,31 @@ function planRelink(localRows, qbRows, { localKey, qbKey, localLink, label }) {
       for (const l of locals) if (localLink(l)) localUnmatched.push(label(l));
       continue;
     }
-    if (locals.length > 1 || qbs.length > 1) { ambiguous.push(label(locals[0])); continue; }
-    if (String(localLink(locals[0]) || '') === String(qbs[0].Id)) alreadyCorrect++;
-    links.push({ localId: locals[0].id, qbId: String(qbs[0].Id) });
+
+    if (qbs.length > 1) {
+      ambiguous.push(label(locals[0]));
+      const qbIds = new Set(qbs.map(q => String(q.Id)));
+      const claimed = new Set();
+      for (const l of locals) {
+        const current = String(localLink(l) || '');
+        if (qbIds.has(current) && !claimed.has(current)) {
+          claimed.add(current);
+          links.push({ localId: l.id, qbId: current });
+          alreadyCorrect++;
+        }
+      }
+      continue;
+    }
+
+    const qbId = String(qbs[0].Id);
+    const correct = locals.find(l => String(localLink(l) || '') === qbId);
+    if (correct) alreadyCorrect++;
+    if (locals.length > 1) duplicates.push(label(locals[0]));
+    links.push({ localId: (correct || locals[0]).id, qbId }); // locals are ordered by id — [0] is the oldest
   }
 
   const qbUnmatched = [...qbByKey.keys()].filter(k => !localByKey.has(k));
-  return { links, ambiguous, localUnmatched, qbUnmatched, alreadyCorrect };
+  return { links, duplicates, ambiguous, localUnmatched, qbUnmatched, alreadyCorrect };
 }
 
 function printList(title, list, max = 40) {
@@ -137,17 +169,21 @@ async function main() {
   console.log(`  matched by SKU: ${productPlan.links.length}  (already pointing at the right Id: ${productPlan.alreadyCorrect})`);
   console.log(`  local products that lose their link (SKU not in this company): ${productPlan.localUnmatched.length}`);
   console.log(`  QuickBooks items with no local product (will be added): ${productPlan.qbUnmatched.length}`);
-  console.log(`  ambiguous SKU, left unlinked: ${productPlan.ambiguous.length}`);
+  console.log(`  SKU on more than one local product (one copy linked, the rest unlinked): ${productPlan.duplicates.length}`);
+  console.log(`  SKU on more than one QuickBooks item (ambiguous, existing correct links kept): ${productPlan.ambiguous.length}`);
 
   console.log(`\nCUSTOMERS  QuickBooks customers: ${qbCustomers.length}   local customers: ${customers.length}`);
   console.log(`  matched by name: ${customerPlan.links.length}  (already pointing at the right Id: ${customerPlan.alreadyCorrect})`);
   console.log(`  local customers that lose their link (name not in this company): ${customerPlan.localUnmatched.length}`);
   console.log(`  QuickBooks customers with no local customer (will be added): ${customerPlan.qbUnmatched.length}`);
-  console.log(`  ambiguous name, left unlinked: ${customerPlan.ambiguous.length}`);
+  console.log(`  name on more than one local customer (one copy linked, the rest unlinked): ${customerPlan.duplicates.length}`);
+  console.log(`  name on more than one QuickBooks customer (ambiguous, existing correct links kept): ${customerPlan.ambiguous.length}`);
 
   printList('Products losing their QuickBooks link', productPlan.localUnmatched);
+  printList('Products with a duplicated SKU', productPlan.duplicates);
   printList('Products with an ambiguous SKU', productPlan.ambiguous);
   printList('Customers losing their QuickBooks link', customerPlan.localUnmatched);
+  printList('Customers that exist more than once locally (not merged here)', customerPlan.duplicates, 15);
   printList('Customers with an ambiguous name', customerPlan.ambiguous);
 
   // Best-effort — a failed lookup must not block the relink itself.
@@ -198,15 +234,10 @@ async function main() {
   }
   console.log(`Relinked ${productPlan.links.length} product(s) and ${customerPlan.links.length} customer(s).`);
 
-  // Ambiguous names/SKUs are skipped here too — upserting them would insert
-  // a second row (or hit the unique SKU constraint) instead of updating.
-  const skipItems = new Set(productPlan.ambiguous.map(key));
-  const skipCustomers = new Set(customerPlan.ambiguous.map(key));
   let itemsCreated = 0, itemsUpdated = 0, customersCreated = 0, customersUpdated = 0;
   const failures = [];
 
   for (const item of qbItems) {
-    if (skipItems.has(key(item.Name))) continue;
     try {
       const r = await upsertQBItem(item);
       if (r?.status === 'created') itemsCreated++; else if (r) itemsUpdated++;
@@ -215,7 +246,6 @@ async function main() {
     }
   }
   for (const c of qbCustomers) {
-    if (skipCustomers.has(key(qbCustomerName(c)))) continue;
     try {
       const r = await upsertQBCustomer(c);
       if (r?.status === 'created') customersCreated++; else if (r) customersUpdated++;
