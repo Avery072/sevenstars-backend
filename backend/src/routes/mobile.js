@@ -232,8 +232,14 @@ router.post('/quiz-complete', requireCustomerAuth, async (req, res) => {
 
 // ── Sub-user management (main user only) ──────────────────────────────────────
 
-function requireMainUser(req, res, next) {
-  if (!req.user.is_main) return res.status(403).json({ error: 'Only the main account user can manage team members' });
+// Reads is_main from the DB rather than the JWT claim, so an admin promoting or
+// demoting a user takes effect immediately instead of at their next login.
+async function requireMainUser(req, res, next) {
+  const result = await pool.query(
+    'SELECT is_main FROM mobile_users WHERE id = $1 AND active = TRUE',
+    [req.user.user_id]
+  );
+  if (!result.rows[0]?.is_main) return res.status(403).json({ error: 'Only the main account user can manage team members' });
   next();
 }
 

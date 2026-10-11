@@ -27,6 +27,9 @@ async function approveCustomer(req, res) {
       return res.status(404).json({ error: 'Pending customer not found' });
     }
     await client.query('UPDATE mobile_users SET active = TRUE WHERE customer_id = $1', [id]);
+    // Normally the signup that created the company is already is_main, but if
+    // that account is gone the oldest linked account takes over.
+    await promoteIfNoMain(client, id);
     await client.query('COMMIT');
     res.json({ message: `${result.rows[0].company_name} approved`, customer_id: result.rows[0].id });
   } catch (err) {
@@ -60,16 +63,75 @@ async function listPendingSubUsers(req, res) {
   res.json(result.rows);
 }
 
+// Approving scans the company's linked accounts: if none of them is the primary
+// contact (e.g. a QB-synced company whose first mobile user is this one), the
+// approved account is promoted so the company has someone who can manage its team.
 async function approveSubUser(req, res) {
   const { id } = req.params;
-  const result = await pool.query(
-    `UPDATE mobile_users SET active = TRUE
-     WHERE id = $1 AND is_main = FALSE AND active = FALSE
-     RETURNING id, name, email`,
-    [id]
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const pending = await client.query(
+      'SELECT customer_id FROM mobile_users WHERE id = $1 AND is_main = FALSE AND active = FALSE',
+      [id]
+    );
+    if (!pending.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Pending sub-user not found' });
+    }
+    const { customer_id } = pending.rows[0];
+    // Serialize approvals per company so two concurrent ones can't both be promoted
+    await client.query('SELECT id FROM customers WHERE id = $1 FOR UPDATE', [customer_id]);
+
+    const result = await client.query(
+      `UPDATE mobile_users SET active = TRUE
+       WHERE id = $1 AND is_main = FALSE AND active = FALSE
+       RETURNING id, name, email`,
+      [id]
+    );
+    if (!result.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Pending sub-user not found' });
+    }
+    const promoted = (await promoteIfNoMain(client, customer_id, id)) !== null;
+    await client.query('COMMIT');
+
+    const who = result.rows[0].name || result.rows[0].email;
+    res.json({
+      message: promoted
+        ? `${who} approved and made the primary account (company had none)`
+        : `${who} approved`,
+      promoted_to_main: promoted,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// If no account under the company holds is_main, promotes preferId (or, when
+// omitted, the oldest active account). Returns the promoted user id, or null
+// if the company already had a primary / has no active accounts.
+async function promoteIfNoMain(client, customerId, preferId = null) {
+  const main = await client.query(
+    'SELECT id FROM mobile_users WHERE customer_id = $1 AND is_main = TRUE LIMIT 1',
+    [customerId]
   );
-  if (!result.rows.length) return res.status(404).json({ error: 'Pending sub-user not found' });
-  res.json({ message: `${result.rows[0].name || result.rows[0].email} approved` });
+  if (main.rows.length) return null;
+
+  const promoted = await client.query(
+    `UPDATE mobile_users SET is_main = TRUE
+     WHERE id = COALESCE($2::int, (
+       SELECT id FROM mobile_users
+       WHERE customer_id = $1 AND active = TRUE
+       ORDER BY created_at ASC, id ASC LIMIT 1
+     ))
+     RETURNING id`,
+    [customerId, preferId]
+  );
+  return promoted.rows[0]?.id ?? null;
 }
 
 async function rejectSubUser(req, res) {
