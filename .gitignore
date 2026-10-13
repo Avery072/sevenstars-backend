@@ -21,3 +21,12 @@ npm-debug.log*
 # IDE
 .vscode/
 .idea/
+
+# Sensitive local-only files — customer data, pricing, credentials. Never commit.
+*.csv
+*.xlsm
+backend/data/
+backend/seed-admin.js
+sevenstar-admin-wireframe.html
+.claude/DOCS.MD
+.claude/todo.MD
