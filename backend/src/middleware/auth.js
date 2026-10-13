@@ -20,6 +20,9 @@ function requireAuth(req, res, next) {
 // mobile_users row still exists and is active on every request, so a token
 // issued before an account was deleted (or is still pending approval) stops
 // working immediately instead of remaining valid until it naturally expires.
+// req.user.customer_id is taken from that row rather than the token, so an
+// admin moving the account to another company applies to the very next
+// request instead of the old company staying in effect until re-login.
 async function requireCustomerAuth(req, res, next) {
   const header = req.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) {
@@ -38,7 +41,7 @@ async function requireCustomerAuth(req, res, next) {
     return res.status(403).json({ error: 'Customer token required' });
   }
 
-  const result = await pool.query('SELECT active FROM mobile_users WHERE id = $1', [decoded.user_id]);
+  const result = await pool.query('SELECT active, customer_id FROM mobile_users WHERE id = $1', [decoded.user_id]);
   if (!result.rows.length) {
     return res.status(401).json({ error: 'Account no longer exists' });
   }
@@ -46,7 +49,7 @@ async function requireCustomerAuth(req, res, next) {
     return res.status(403).json({ error: 'Your account is pending admin approval' });
   }
 
-  req.user = decoded;
+  req.user = { ...decoded, customer_id: result.rows[0].customer_id };
   next();
 }
 
