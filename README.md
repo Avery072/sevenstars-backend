@@ -1,132 +1,77 @@
-# Seven Stars Food — Ordering Backend
+# Seven Stars Food — Ordering System
 
-Backend and admin portal for a wholesale seafood distributor. Restaurants place orders from a mobile app, staff manage orders and inventory in a web portal, and every order becomes an invoice in QuickBooks Online, which remains the company's system of record for billing.
+An ordering system for Seven Stars Food, a wholesale seafood distributor. Restaurants order from a mobile app, staff run the day from a web admin page, and every order shows up in QuickBooks as an invoice without anyone retyping it.
 
-The system is in production use, deployed on Railway.
+## The three pieces
 
-## What it does
+1. **The mobile app** — what customers (restaurants and other companies) use to browse products and place orders.
+2. **The admin page** — what staff use to manage orders, customers, products and reports.
+3. **QuickBooks Online** — where invoicing, inventory counts and accounting live. The system keeps itself in step with QuickBooks automatically, in both directions.
 
-- **Order intake** from two sources: the customer mobile app and manual entry by staff in the admin portal.
-- **Two-way QuickBooks Online sync** for invoices, items (products) and customers.
-- **Inventory** that follows QuickBooks quantities while reserving stock for orders that have not been invoiced yet.
-- **Warehouse reports**: a packing report, a salmon pull report with each customer's cut preferences, and a daily pull export (PDF/Excel).
-- **Customer accounts** with an approval flow: staff approve a new company, and that company's primary user approves its own additional users.
+This repository holds the admin page and the server behind both it and the mobile app.
 
-## Architecture
+## Customers and accounts
 
-```
-Mobile app (React Native) ─┐
-                           ├─► Express API ──► PostgreSQL
-Admin portal (static JS) ──┘        │  ▲
-                                    ▼  │
-                            QuickBooks Online
-                     (OAuth2 · REST API · webhooks)
-```
+- A **customer** is a company, not a person. Several people at the same company can each have their own login.
+- **New companies need staff approval.** Someone signs up in the app with their company details, and the company waits in a pending list until staff approve it.
+- **Joining an existing company** does not need staff. The company's main user (the first person who signed up) approves teammates from inside the app, and can remove them or hand the main-user role to someone else.
+- Staff can also see every account grouped by company, delete accounts, choose a company's main user, and move a user to a different company.
+- **Salmon preferences are asked once.** The first time a company logs in, it answers a short quiz about how it wants its salmon cut. The answers are saved and appear on the warehouse reports, so nobody has to ask again with each order.
+- A customer who forgets their password can reset it with a 6-digit code sent by email.
 
-| Layer | Technology |
-|---|---|
-| Runtime | Node.js, Express |
-| Database | PostgreSQL (`pg`), 18 forward-only SQL migrations |
-| Accounting | QuickBooks Online via `intuit-oauth` and the QBO REST API |
-| Auth | JWT, separate for staff and for mobile customers; bcrypt password hashes |
-| Other | Cloudinary (product images), Brevo (password-reset email), `pdfkit` and `xlsx` (reports), `helmet`, `express-rate-limit` |
+## Orders
 
-```
-backend/
-├── src/
-│   ├── app.js           Entry point, scheduled jobs
-│   ├── config/          Database pool, QuickBooks OAuth client, email
-│   ├── routes/          Thin Express routers
-│   ├── controllers/     Business logic
-│   ├── middleware/      JWT auth, QuickBooks API helpers
-│   ├── services/        Shared QuickBooks upsert logic, invoice-number counter
-│   └── utils/
-├── migrations/          001 → 018
-├── scripts/             One-off maintenance and repair tools
-└── public/index.html    Admin portal
-```
+- Orders come in from the mobile app or are entered by staff. Prices always come from the current product list, never from something typed in at the time.
+- **Two orders for the same delivery date become one.** A customer can keep adding to that day's order and it stays a single order and a single invoice.
+- **Customers can change or cancel their own order** until the early morning of the delivery day. A cancelled order is kept and marked as voided, so there is still a record.
+- **Staff can edit or delete orders** from the admin page.
+- **Orders entered directly in QuickBooks** by a salesperson appear in the system too, but are only ever changed in QuickBooks.
+- **Weights and prices can change after packing.** Fish is ordered by count, but the real weight is only known once the order is packed. When that final number is entered on the QuickBooks invoice, the system picks up the correction automatically.
+- The admin page shows orders for today, the last 3 days, a week or a month. Orders are kept for 31 days.
 
-The mobile app lives in a separate repository.
+## Products and stock
 
-## Engineering highlights
+Each product mirrors an item in QuickBooks, with a few extra controls:
 
-### Keeping two systems consistent
+- **Market Price** — hides the price in the mobile app and shows "Market Price" instead, for items whose price moves daily. Staff always see the real number.
+- **Out of Stock** — sets the quantity to zero in QuickBooks itself, so it is a firm "nothing left".
+- **Availability override** — the opposite: marks an item as available even when the QuickBooks count looks like zero or is out of date. It stays on until someone turns it off, so overridden products sit at the top of the list with a badge.
+- **Product photos** can be uploaded for the mobile app.
 
-QuickBooks does not guarantee webhook delivery, so each entity is kept in sync by three independent paths that share one upsert function:
+The quantity customers see is the QuickBooks count minus what other orders have already claimed. That stops two customers from both being promised the last box.
 
-1. **Webhooks** for near-real-time changes. The signature is verified with HMAC-SHA256, the handler answers `200` immediately, and processing happens afterwards.
-2. **A reconciliation sweep every 20 minutes** that re-pulls recent invoices and item quantities and repairs anything a webhook missed.
-3. **A manual full sync** for initial setup and on-demand checks.
+## Reports
 
-Orders are pushed to QuickBooks asynchronously, so a QuickBooks outage never blocks a customer from ordering. Failed pushes are recorded on the order and retried.
+- **Packing report** — for a delivery date, every product and how much each customer ordered.
+- **Salmon pull report** — the same for salmon, with each customer's cut preferences alongside. Downloads to Excel.
+- **Daily pull** — a printable PDF of the day's sales by customer, with a grand total.
 
-### Invoice numbering under concurrency
+## How the QuickBooks sync works
 
-This QuickBooks company uses custom transaction numbers, so QuickBooks does not assign invoice numbers itself. Reading the last number and adding one was racy when two orders arrived together. The fix was a PostgreSQL sequence as the single atomic source of the next number, with a retry when QuickBooks reports a duplicate (for example, when staff create an invoice by hand at the same moment) and a recovery action that moves the counter past QuickBooks' highest number.
+The sync runs in both directions, all the time:
 
-### Preventing oversold stock
+- **System → QuickBooks.** Placing or editing an order creates or updates the matching invoice, normally within seconds. A customer who is new to QuickBooks is created there on their first order, with their address.
+- **QuickBooks → system.** New customers, new or changed products, invoice corrections and voids made in QuickBooks flow back automatically, usually almost immediately.
+- **A safety net every 20 minutes.** The system re-checks recent invoices and stock on its own, so nothing stays out of step for long even if a QuickBooks notification is missed.
+- **Nothing is lost when QuickBooks is unreachable.** Customers can still order; the invoice is sent once QuickBooks is back.
 
-QuickBooks owns `quantity_on_hand`, but its updates arrive seconds to minutes late. The app keeps its own `reserved` count per product, so available stock is the QuickBooks quantity minus what pending orders have already claimed. Related safeguards:
+Staff rarely need them, but the admin page has buttons to run a sync on demand, retry invoices that have not gone through, check for differences with QuickBooks, and fix invoice numbers.
 
-- Product rows are always locked in ascending id order, which removes a deadlock between order placement and order editing.
-- A per-order compare-and-set lock stops the background sweep and a user action from pushing the same order twice.
-- Local stock is consumed at the moment an invoice is created, closing a window in which a second order could pass the stock check.
+## For developers
 
-### Order editing with a clear ownership rule
-
-Every order is tagged with its origin (`mobile`, `admin` or `qb`) when it is created. The origin decides who may edit it through the app; orders entered directly in QuickBooks are only edited there. Both edit endpoints call one shared function, so the mobile and admin paths cannot drift apart. QuickBooks-side corrections are still pulled in for every order, because the final weight and price of fish are only known after fulfilment.
-
-### Security
-
-- Separate JWT audiences for staff and customers, with role checks read from the database so a role change applies immediately.
-- Server-authoritative pricing: prices sent by a client are ignored.
-- Rate limiting across the API, with a tighter limit on password-reset endpoints; reset codes are stored hashed, expire after 15 minutes and lock after repeated failures.
-- No secrets in the repository; all credentials come from environment variables.
-
-## API overview
-
-| Area | Examples |
-|---|---|
-| Auth | `POST /api/auth/login`, `POST /api/auth/customer-login`, `POST /api/auth/forgot-password` |
-| Orders | `GET /api/orders?from=&to=`, `POST /api/orders`, `PATCH /api/orders/:id` |
-| Products | `GET /api/products`, `PATCH /api/products/:id/out-of-stock` |
-| Customers | `GET /api/customers`, `PATCH /api/customers/:id` |
-| Mobile | `GET /api/mobile/products`, `POST /api/mobile/orders`, `PATCH /api/mobile/orders/:id` |
-| Admin | `POST /api/admin/sync-from-qb`, `GET /api/admin/packing-report`, `POST /api/admin/invoice-number-recovery` |
-| Webhooks | `POST /api/webhooks/quickbooks` |
-
-## Running locally
-
-Requires Node.js, PostgreSQL and a QuickBooks Online developer (sandbox) app.
+The server is Node.js with Express and PostgreSQL, and connects to QuickBooks Online. The mobile app is a separate React Native project.
 
 ```bash
 cd backend
 npm install
-
-# create backend/.env with the variables listed below
-createdb seven_stars_food
-for f in migrations/*.sql; do psql "$DATABASE_URL" -f "$f"; done
-
-npm run dev          # http://localhost:3001
+npm run dev
 ```
 
-Then create an admin user (a bcrypt hash in `admin_users`) and open `/api/auth/qb` in a browser to connect QuickBooks.
+Before running, create `backend/.env` with the database address, a login secret and the QuickBooks app keys, and apply the files in `backend/migrations/` to the database in order. Customer and pricing data are deliberately not part of this repository.
 
-| Variable | Purpose |
-|---|---|
-| `DATABASE_URL` | PostgreSQL connection string |
-| `JWT_SECRET` | Signs staff and customer tokens |
-| `QB_CLIENT_ID`, `QB_CLIENT_SECRET`, `QB_REDIRECT_URI` | QuickBooks OAuth app |
-| `QB_WEBHOOK_VERIFIER_TOKEN` | Verifies webhook signatures |
-| `BREVO_API_KEY`, `EMAIL_FROM` | Password-reset email (optional locally) |
-| `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Product images (optional) |
-| `NODE_ENV`, `PORT` | `development` uses the QuickBooks sandbox |
+## Credits
 
-Customer and pricing data files are deliberately not part of this repository.
-
-## Team and my role
-
-Built by a small team for a real business. I (Renpei Cai) designed and built the backend from the first commit: the schema and migrations, the QuickBooks integration, the order, inventory and concurrency logic, the authentication and approval flows, and much of the admin portal. Teammates built the mobile app and contributed product creation, reports and the password-reset flow on the backend.
+Built by a small team for Seven Stars Food. Renpei Cai built the server, the QuickBooks connection and much of the admin page; teammates built the mobile app and contributed product creation, reports and password reset.
 
 ## License
 
