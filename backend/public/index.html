@@ -241,6 +241,7 @@
         <button class="btn btn-outline" id="sync-pending-btn" onclick="syncPendingInvoices()" style="display:none;font-size:11px;">&#8635; SYNC PENDING TO QB</button>
         <button class="btn btn-outline" id="sync-invoices-btn" onclick="openQBPullModal()" style="font-size:11px;">&#8595; PULL INVOICES FROM QB</button>
         <button class="btn btn-outline" id="reconcile-btn" onclick="checkDiscrepancies()" style="font-size:11px;">&#8635; CHECK QB DISCREPANCIES</button>
+        <button class="btn btn-outline" id="invoice-recovery-btn" onclick="openInvoiceRecovery()" style="font-size:11px;" title="Use after an outage or data migration, when invoices were made in QuickBooks and app orders fail with a duplicate invoice number"># FIX INVOICE NUMBERS</button>
         <button class="btn btn-primary" id="topbar-btn" onclick="handleTopbarBtn()">+ NEW ORDER</button>
       </div>
     </div>
@@ -546,6 +547,61 @@
         <button class="btn btn-outline" style="text-align:left;" onclick="doSyncInvoices(7)">Past Week</button>
         <button class="btn btn-outline" style="text-align:left;" onclick="doSyncInvoices(30)">Past Month</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Invoice number recovery -->
+<div class="modal-overlay" id="modal-invoice-recovery">
+  <div class="modal" style="max-width:640px;">
+    <div class="modal-head">
+      <div class="modal-title">Fix Invoice Numbers</div>
+      <button class="modal-close" onclick="closeModal('modal-invoice-recovery')">X</button>
+    </div>
+    <div class="modal-body">
+      <p style="margin:0 0 10px;font-size:12px;color:var(--gray-dark);line-height:1.6;">For when invoices were created in QuickBooks while the app was not keeping up (outage, data migration). Pulls the new QuickBooks invoices, moves the app's invoice-number counter past QuickBooks' highest number, then sends the orders below to QuickBooks with numbers from the corrected counter.</p>
+      <div id="ir-content" style="max-height:50vh;overflow:auto;"></div>
+      <div class="form-error" id="ir-error"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-invoice-recovery')">CLOSE</button>
+      <button class="btn btn-primary" id="ir-run-btn" onclick="runInvoiceRecovery()">PULL FROM QB &amp; RE-NUMBER</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: Change a mobile user's company -->
+<div class="modal-overlay" id="modal-change-company">
+  <div class="modal" style="max-width:440px;">
+    <div class="modal-head">
+      <div class="modal-title">Change Company</div>
+      <button class="modal-close" onclick="closeModal('modal-change-company')">X</button>
+    </div>
+    <div class="modal-body">
+      <p style="margin:0 0 10px;font-size:12px;line-height:1.6;" id="cc-summary"></p>
+      <div style="display:flex;gap:14px;margin-bottom:10px;font-size:12px;">
+        <label><input type="radio" name="cc-mode" value="existing" checked onchange="setChangeCompanyMode('existing')"> Existing company</label>
+        <label><input type="radio" name="cc-mode" value="new" onchange="setChangeCompanyMode('new')"> Create new company</label>
+      </div>
+      <div id="cc-existing">
+        <div class="form-group">
+          <label class="form-label">Company</label>
+          <input class="form-input" id="cc-search" placeholder="Search company..." autocomplete="off" oninput="filterChangeCompanyOptions(this.value)" style="margin-bottom:6px;">
+          <select class="form-select" id="cc-customer" size="7"></select>
+        </div>
+      </div>
+      <div id="cc-new" style="display:none;">
+        <div class="form-group"><label class="form-label">Company Name *</label><input class="form-input" id="cc-new-name" placeholder="Restaurant / company name"></div>
+        <div class="form-group"><label class="form-label">Phone</label><input class="form-input" id="cc-new-phone" placeholder="206-000-0000"></div>
+        <div class="form-group"><label class="form-label">Address</label><input class="form-input" id="cc-new-address" placeholder="123 Main St, Seattle, WA 98101"></div>
+        <p style="margin:0;font-size:11px;color:var(--gray-dark);line-height:1.5;">The company is added to QuickBooks automatically with its first order. Other details can be edited under Customers.</p>
+      </div>
+      <p style="margin:10px 0 0;font-size:11px;color:var(--gray-dark);line-height:1.5;">Orders this user already placed stay with the previous company.</p>
+      <div class="form-error" id="cc-error"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('modal-change-company')">CANCEL</button>
+      <button class="btn btn-primary" id="cc-save-btn" onclick="submitChangeCompany()">MOVE USER</button>
     </div>
   </div>
 </div>
@@ -895,6 +951,84 @@ async function checkDiscrepancies() {
     );
     await refreshOrdersAfterMutation();
   }
+}
+
+/* ── Invoice number recovery (counter behind QuickBooks) ── */
+function escHtml(v) {
+  return String(v ?? '').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
+}
+
+function invoiceRecoveryCounterHTML(counter) {
+  return `<div style="font-size:12px;margin-bottom:10px;line-height:1.7;">
+    Highest invoice number in QuickBooks: <b>${counter.qbHighest ?? 'none found'}</b><br>
+    App's next invoice number: <b>${counter.next}</b>
+    ${counter.raised === true ? `<span class="badge badge-green" style="margin-left:6px;">RAISED FROM ${counter.previousNext}</span>` : ''}
+    ${counter.behind ? '<span class="badge badge-red" style="margin-left:6px;">BEHIND QUICKBOOKS</span>' : ''}
+    ${counter.behind === false ? '<span class="badge badge-green" style="margin-left:6px;">OK</span>' : ''}
+  </div>`;
+}
+
+async function openInvoiceRecovery() {
+  const content = document.getElementById('ir-content');
+  const runBtn = document.getElementById('ir-run-btn');
+  document.getElementById('ir-error').style.display = 'none';
+  content.innerHTML = '<div class="empty-state">Checking QuickBooks...</div>';
+  runBtn.style.display = '';
+  runBtn.disabled = true;
+  runBtn.textContent = 'PULL FROM QB & RE-NUMBER';
+  openModal('modal-invoice-recovery');
+
+  const res = await api('/api/admin/invoice-number-recovery');
+  if (!res) return;
+  if (res.error) { content.innerHTML = ''; showErr(document.getElementById('ir-error'), res.error); return; }
+
+  const rows = res.unpushed.map(o => `<tr>
+      <td class="mono">#${o.id}</td>
+      <td>${escHtml(o.company_name)}</td>
+      <td style="font-size:11px;">${o.delivery_date}</td>
+      <td style="font-size:11px;">$${parseFloat(o.total || 0).toFixed(2)}</td>
+      <td style="font-size:11px;color:var(--red-dark);">${o.push_attempts > 0 ? escHtml(`${o.push_attempts} failed — ${(o.last_push_error || 'unknown error').slice(0, 140)}`) : ''}</td>
+    </tr>`).join('');
+  content.innerHTML = invoiceRecoveryCounterHTML(res.counter) +
+    `<div style="font-size:11px;font-weight:bold;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px;">Orders not in QuickBooks (${res.unpushed.length})</div>` +
+    (res.unpushed.length
+      ? `<table><thead><tr><th>Order</th><th>Company</th><th>Delivery</th><th>Total</th><th>Last error</th></tr></thead><tbody>${rows}</tbody></table>`
+      : '<div class="empty-state">Every order already has a QuickBooks invoice.</div>');
+  runBtn.disabled = false;
+}
+
+async function runInvoiceRecovery() {
+  if (!confirm('Pull new invoices from QuickBooks, move the invoice-number counter past them, and send the listed orders to QuickBooks?')) return;
+  const content = document.getElementById('ir-content');
+  const errEl = document.getElementById('ir-error');
+  const runBtn = document.getElementById('ir-run-btn');
+  errEl.style.display = 'none';
+  runBtn.disabled = true;
+  runBtn.textContent = '⏳ Working...';
+
+  const res = await api('/api/admin/invoice-number-recovery', { method: 'POST' });
+  runBtn.textContent = 'PULL FROM QB & RE-NUMBER';
+  if (!res) return;
+  if (res.error) { runBtn.disabled = false; showErr(errEl, res.error); return; }
+
+  const rows = res.orders.map(o => `<tr>
+      <td class="mono">#${o.id}</td>
+      <td>${escHtml(o.company_name)}</td>
+      <td style="font-size:11px;">${o.delivery_date}</td>
+      <td>${o.status === 'pushed'
+        ? `<span class="badge badge-green">INVOICE #${escHtml(o.qb_doc_number || '—')}</span>${o.merged ? ' <span style="font-size:11px;color:var(--gray-dark);">added to this customer\'s existing invoice for that day</span>' : ''}`
+        : `<span class="badge badge-red">FAILED</span> <span style="font-size:11px;color:var(--red-dark);">${escHtml(o.error)}</span>`}</td>
+    </tr>`).join('');
+  content.innerHTML = invoiceRecoveryCounterHTML(res.counter) +
+    `<div style="font-size:12px;margin-bottom:10px;line-height:1.7;">
+       Pulled from QuickBooks (invoices dated ${res.since} onward): <b>${res.pull.pulled}</b> new, ${res.pull.updated} updated, ${res.pull.voided} voided${res.pull.failed ? `, <span style="color:var(--red-dark);">${res.pull.failed} could not be read</span>` : ''} (${res.pull.checked} checked)<br>
+       Sent to QuickBooks: <b>${res.pushed}</b>${res.failed ? `, <span style="color:var(--red-dark);">${res.failed} failed</span>` : ''}
+     </div>` +
+    (res.orders.length
+      ? `<table><thead><tr><th>Order</th><th>Company</th><th>Delivery</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table>`
+      : '');
+  runBtn.style.display = 'none';
+  await refreshOrdersAfterMutation();
 }
 
 function checkPendingInvoices() {
@@ -1985,6 +2119,7 @@ function renderAccounts(q = '') {
         <td style="font-size:11px;color:var(--gray-dark);">${date}</td>
         <td style="display:flex;gap:4px;">
           ${!u.is_main && u.user_active ? `<button class="action-btn" style="background:#dbeafe;color:#1d4ed8;border-color:#1d4ed8;" onclick="setMainUser(${u.user_id},'${(u.name||u.email).replace(/'/g,"\\'")}')">&#9733; MAKE PRIMARY</button>` : ''}
+          <button class="action-btn" onclick="openChangeCompany(${u.user_id})">&#8644; CHANGE COMPANY</button>
           <button class="action-btn" style="background:var(--red-light);color:var(--red-dark);border-color:var(--red-dark);" onclick="deleteAccount(${u.user_id},'${(u.name||u.email).replace(/'/g,"\\'")}')">&#10005; DELETE</button>
         </td>
       </tr>`;
@@ -2009,6 +2144,78 @@ async function setMainUser(id, name) {
   if (res.error) { alert(res.error); return; }
   showToast(res.message);
   await loadAccounts();
+}
+
+/* ── Change a user's company ── */
+let changeCompanyUserId = null;
+
+function setChangeCompanyMode(mode) {
+  document.getElementById('cc-existing').style.display = mode === 'existing' ? '' : 'none';
+  document.getElementById('cc-new').style.display = mode === 'new' ? '' : 'none';
+}
+
+function filterChangeCompanyOptions(query) {
+  const sel = document.getElementById('cc-customer');
+  const prevValue = sel.value;
+  const current = allAccountRows.find(r => r.user_id === changeCompanyUserId)?.customer_id;
+  const q = query.toLowerCase();
+  const list = allCustomers.filter(c => c.id !== current && (!q || (c.company_name || '').toLowerCase().includes(q)));
+  sel.innerHTML = list.map(c => `<option value="${c.id}">${escHtml(c.company_name)}</option>`).join('');
+  if (list.some(c => String(c.id) === prevValue)) sel.value = prevValue;
+}
+
+function openChangeCompany(userId) {
+  const u = allAccountRows.find(r => r.user_id === userId);
+  if (!u) return;
+  changeCompanyUserId = userId;
+  document.getElementById('cc-summary').innerHTML =
+    `Move <b>${escHtml(u.name || u.email)}</b> (${escHtml(u.email)}) from <b>${escHtml(u.company_name)}</b> to:`;
+  document.querySelector('input[name="cc-mode"][value="existing"]').checked = true;
+  setChangeCompanyMode('existing');
+  ['cc-search', 'cc-new-name', 'cc-new-phone', 'cc-new-address'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('cc-error').style.display = 'none';
+  filterChangeCompanyOptions('');
+  openModal('modal-change-company');
+}
+
+async function submitChangeCompany() {
+  const errEl = document.getElementById('cc-error');
+  errEl.style.display = 'none';
+  const mode = document.querySelector('input[name="cc-mode"]:checked').value;
+
+  let body;
+  if (mode === 'existing') {
+    const customer_id = Number(document.getElementById('cc-customer').value);
+    if (!customer_id) { showErr(errEl, 'Select a company'); return; }
+    body = { customer_id };
+  } else {
+    const company_name = document.getElementById('cc-new-name').value.trim();
+    if (!company_name) { showErr(errEl, 'Company name is required'); return; }
+    body = { new_company: {
+      company_name,
+      phone: document.getElementById('cc-new-phone').value.trim() || null,
+      address: document.getElementById('cc-new-address').value.trim() || null,
+    } };
+  }
+
+  const btn = document.getElementById('cc-save-btn');
+  btn.disabled = true;
+  const res = await api(`/api/admin/accounts/user/${changeCompanyUserId}/change-company`, { method: 'POST', body: JSON.stringify(body) });
+  btn.disabled = false;
+  if (!res) return;
+  if (res.error) { showErr(errEl, res.error); return; }
+
+  closeModal('modal-change-company');
+  showToast(res.message);
+  await loadAccounts();
+  loadPending();
+  if (res.company_created) {
+    allCustomers = await api('/api/customers') || allCustomers;
+    renderCustomers();
+    renderSalmonCuts();
+    updateStats();
+    populateDropdowns();
+  }
 }
 
 /* ── Pending Approvals ── */

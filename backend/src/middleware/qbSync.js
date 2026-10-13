@@ -111,7 +111,9 @@ async function createQBInvoice(invoicePayload) {
 // time). Callers can catch this to retry with a fresh number.
 function isDuplicateDocNumberError(err) {
   const errors = err.response?.data?.Fault?.Error;
-  return Array.isArray(errors) && errors.some(e => e.code === '6140');
+  return Array.isArray(errors) && errors.some(e =>
+    e.code === '6140' || /duplicate document number/i.test(`${e.Message || ''} ${e.Detail || ''}`)
+  );
 }
 
 async function createQBCustomer(customerPayload) {

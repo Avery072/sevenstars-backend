@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const { createQBInvoice, appendToQBInvoice, patchQBInvoiceLines, createQBCustomer, fetchQBCustomer, getQBClient, deleteQBInvoice, voidQBInvoice, isDuplicateDocNumberError } = require('../middleware/qbSync');
+const { raiseDocNumberCounter } = require('../services/docNumberCounter');
 
 async function nextQBDocNumber() {
   const { rows } = await pool.query("SELECT nextval('qb_invoice_doc_number_seq')::text AS n");
@@ -8,7 +9,10 @@ async function nextQBDocNumber() {
 
 // Creates the invoice with a fresh DocNumber, retrying with a new one if QBO
 // rejects it as a duplicate (e.g. a staff member created an invoice directly
-// in QBO with the same number around the same time).
+// in QBO with the same number around the same time). A duplicate means the
+// counter is behind QuickBooks, possibly by a lot (invoices entered there
+// during an outage or after a data migration), so before retrying it is moved
+// past QuickBooks' highest number rather than stepped up one at a time.
 async function createQBInvoiceWithDocNumber(payload, attempts = 3) {
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const docNumber = await nextQBDocNumber();
@@ -17,6 +21,9 @@ async function createQBInvoiceWithDocNumber(payload, attempts = 3) {
     } catch (err) {
       if (attempt < attempts && isDuplicateDocNumberError(err)) {
         console.warn(`DocNumber ${docNumber} was already taken in QBO, retrying with a new one (attempt ${attempt}/${attempts})`);
+        await raiseDocNumberCounter()
+          .then(r => { if (r.raised) console.warn(`Invoice-number counter was behind QuickBooks — raised, next is ${r.next}`); })
+          .catch(raiseErr => console.warn(`Could not raise the invoice-number counter from QuickBooks: ${raiseErr.message}`));
         continue;
       }
       throw err;

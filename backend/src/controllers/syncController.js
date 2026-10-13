@@ -5,6 +5,7 @@ const { processInvoice } = require('./webhooksController');
 const { getQBClient } = require('../middleware/qbSync');
 const { upsertQBItem, upsertQBCustomer } = require('../services/qbEntitySync');
 const { pushToQB, retryOrderEditPush } = require('./ordersController');
+const { docNumberCounterStatus, raiseDocNumberCounter } = require('../services/docNumberCounter');
 
 async function syncFromQB(req, res) {
   let items, customers;
@@ -257,4 +258,121 @@ async function runReconciliation(from, to) {
   };
 }
 
-module.exports = { syncFromQB, syncInvoicesFromQB, reconcileOrders, runReconciliation, refreshItemsFromQB };
+// Orders the app holds that QuickBooks doesn't have an invoice for yet — same
+// rule as syncPendingInvoices (no qb_invoice_id, at least one active line).
+async function listUnpushedOrders() {
+  const { rows } = await pool.query(
+    `SELECT o.id, to_char(o.delivery_date, 'YYYY-MM-DD') AS delivery_date, o.total, o.source,
+            o.order_placed_at, o.push_attempts, o.last_push_error, c.company_name
+     FROM orders o
+     JOIN customers c ON c.id = o.customer_id
+     WHERE o.qb_invoice_id IS NULL
+       AND EXISTS (SELECT 1 FROM order_items oi WHERE oi.order_id = o.id AND oi.status = 'active')
+     ORDER BY o.id`
+  );
+  return rows;
+}
+
+// GET /api/admin/invoice-number-recovery — read-only preview of what the
+// recovery below would work on: the orders QuickBooks doesn't have, and where
+// the invoice-number counter stands against QuickBooks' highest number.
+async function previewInvoiceNumberRecovery(req, res) {
+  let counter;
+  try {
+    counter = await docNumberCounterStatus();
+  } catch (err) {
+    if (err.message?.includes('Refresh token')) {
+      return res.status(401).json({ error: 'QB token expired. Re-authorize at /api/auth/qb' });
+    }
+    throw err;
+  }
+  res.json({ counter, unpushed: await listUnpushedOrders() });
+}
+
+// POST /api/admin/invoice-number-recovery — for when invoices were created in
+// QuickBooks while the app wasn't keeping up (outage, data migration), which
+// leaves the invoice-number counter behind and every new push failing as a
+// duplicate number. In order:
+//  1. notes the orders QuickBooks doesn't have yet,
+//  2. pulls the invoices QuickBooks has that the app doesn't,
+//  3. moves the counter past QuickBooks' highest invoice number,
+//  4. pushes the orders from step 1, which draw their numbers from the
+//     corrected counter.
+// The pull reaches back a week, or to the earliest unpushed order's delivery
+// date if that is older (never past the 31 days orders are kept for).
+async function runInvoiceNumberRecovery(req, res) {
+  const unpushed = await listUnpushedOrders();
+
+  const day = (offset) => { const d = new Date(); d.setDate(d.getDate() + offset); return d.toISOString().slice(0, 10); };
+  const earliest = unpushed.map(o => o.delivery_date).sort()[0];
+  let since = day(-7);
+  if (earliest && earliest < since) since = earliest;
+  if (since < day(-31)) since = day(-31);
+
+  let invoices, counter;
+  try {
+    invoices = await queryQBInvoicesInRange(since, '2999-12-31');
+  } catch (err) {
+    if (err.message?.includes('Refresh token')) {
+      return res.status(401).json({ error: 'QB token expired. Re-authorize at /api/auth/qb' });
+    }
+    throw err;
+  }
+
+  let pulled = 0, updated = 0, voided = 0, pullFailed = 0;
+  for (const inv of invoices) {
+    try {
+      const result = await processInvoice(inv);
+      if (result.status === 'created') pulled++;
+      else if (result.status === 'updated') updated++;
+      else if (result.status === 'voided') voided++;
+    } catch (err) {
+      console.error(`Invoice-number recovery: failed to process QB invoice ${inv.Id}:`, err.message);
+      pullFailed++;
+    }
+  }
+
+  counter = await raiseDocNumberCounter();
+
+  const orders = [];
+  for (const o of unpushed) {
+    const entry = { id: o.id, company_name: o.company_name, delivery_date: o.delivery_date, total: o.total };
+    try {
+      // Re-read: the 20-minute sweep or the order's own first push may have got there meanwhile.
+      const { rows: [order] } = await pool.query('SELECT * FROM orders WHERE id = $1', [o.id]);
+      if (!order) {
+        orders.push({ ...entry, status: 'failed', error: 'Order no longer exists' });
+        continue;
+      }
+      if (!order.qb_invoice_id) await pushToQB(order);
+
+      const { rows: [after] } = await pool.query(
+        `SELECT o.qb_invoice_id, o.qb_doc_number,
+                (SELECT COUNT(*) FROM orders o2 WHERE o2.qb_invoice_id = o.qb_invoice_id) > 1 AS merged
+         FROM orders o WHERE o.id = $1`,
+        [o.id]
+      );
+      if (after?.qb_invoice_id) {
+        orders.push({ ...entry, status: 'pushed', qb_doc_number: after.qb_doc_number, merged: after.merged });
+      } else {
+        orders.push({ ...entry, status: 'failed', error: 'Another push of this order is in progress — check again in a few minutes' });
+      }
+    } catch (err) {
+      const fault = err.response?.data?.Fault?.Error?.[0];
+      console.error(`Invoice-number recovery: push failed for order ${o.id}:`, err.response?.data ? JSON.stringify(err.response.data) : err.message);
+      orders.push({ ...entry, status: 'failed', error: fault ? (fault.Detail || fault.Message) : err.message });
+    }
+  }
+
+  res.json({
+    message: 'Invoice number recovery complete',
+    since,
+    counter,
+    pull: { checked: invoices.length, pulled, updated, voided, failed: pullFailed },
+    pushed: orders.filter(o => o.status === 'pushed').length,
+    failed: orders.filter(o => o.status === 'failed').length,
+    orders,
+  });
+}
+
+module.exports = { syncFromQB, syncInvoicesFromQB, reconcileOrders, runReconciliation, refreshItemsFromQB, previewInvoiceNumberRecovery, runInvoiceNumberRecovery };
