@@ -315,9 +315,12 @@ async function uploadProductImage(req, res) {
     const { id } = req.params;
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
+    // No public_id: Cloudinary assigns a unique one. Keying it on the local
+    // products.id let a re-upload overwrite another item's image once
+    // full-resync-from-qb.js reset the id sequence (RESTART IDENTITY).
     const result = await new Promise((resolve, reject) => {
       cloudinary.uploader.upload_stream(
-        { folder: 'seven-stars-products', public_id: `product-${id}`, overwrite: true,
+        { folder: 'seven-stars-products',
           transformation: [{ width: 800, height: 800, crop: 'limit' }] },
         (err, r) => { if (err) reject(err); else resolve(r); }
       ).end(req.file.buffer);

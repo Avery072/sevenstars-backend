@@ -167,6 +167,27 @@ async function reattachPreservedFields(map) {
   return { matched, totalFresh: freshCustomers.length, ambiguous, unmatched };
 }
 
+// products.image_url is local-only (Cloudinary), so it's re-attached by sku —
+// ids change on the wipe (RESTART IDENTITY). A sku seen twice is skipped.
+async function reattachProductImages(productsBackup) {
+  const bySku = new Map();
+  for (const p of productsBackup) {
+    if (!p.image_url) continue;
+    const key = nameKey(p.sku);
+    if (key) bySku.set(key, bySku.has(key) ? null : p.image_url);
+  }
+  let matched = 0;
+  for (const [key, url] of bySku) {
+    if (url === null) continue;
+    const { rowCount } = await pool.query(
+      `UPDATE products SET image_url = $1 WHERE LOWER(REGEXP_REPLACE(TRIM(sku), '\\s+', ' ', 'g')) = $2`,
+      [url, key]
+    );
+    if (rowCount === 1) matched++;
+  }
+  return { matched, total: bySku.size };
+}
+
 // Same loop shape as syncController.js's upsertItems/upsertCustomers — kept
 // separate here only because those are wired to an Express (req, res) and
 // this script has neither.
@@ -233,6 +254,9 @@ async function main() {
   const pullResult = await pullProductsAndCustomers();
   console.log(`  Items: ${pullResult.itemsSeen} seen, ${pullResult.itemsCreated} products created`);
   console.log(`  Customers: ${pullResult.customersSeen} seen, ${pullResult.customersCreated} customers created\n`);
+
+  const images = await reattachProductImages(backup.products);
+  console.log(`  Product images re-attached by sku: ${images.matched} of ${images.total}\n`);
 
   console.log('Re-attaching preserved customer preferences...');
   const reattach = await reattachPreservedFields(preservationMap);
