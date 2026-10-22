@@ -12,6 +12,8 @@ cloudinary.config({
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
+// Every product image carries this tag; scripts/relink-product-images.js lists by it.
+const PRODUCT_IMAGE_TAG = 'seven-stars-product';
 
 const PRODUCT_CATEGORIES = [
   'White Fish / Premium Fish',
@@ -315,12 +317,18 @@ async function uploadProductImage(req, res) {
     const { id } = req.params;
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
+    const { rows } = await pool.query('SELECT sku FROM products WHERE id = $1', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Product not found' });
+
     // No public_id: Cloudinary assigns a unique one. Keying it on the local
     // products.id let a re-upload overwrite another item's image once
     // full-resync-from-qb.js reset the id sequence (RESTART IDENTITY).
+    // The sku goes on the asset (tag + context) so images can be relinked
+    // from Cloudinary alone if image_url is ever lost — see
+    // scripts/relink-product-images.js.
     const result = await new Promise((resolve, reject) => {
       cloudinary.uploader.upload_stream(
-        { folder: 'seven-stars-products',
+        { folder: 'seven-stars-products', tags: [PRODUCT_IMAGE_TAG], context: { sku: rows[0].sku },
           transformation: [{ width: 800, height: 800, crop: 'limit' }] },
         (err, r) => { if (err) reject(err); else resolve(r); }
       ).end(req.file.buffer);

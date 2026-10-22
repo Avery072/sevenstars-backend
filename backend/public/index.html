@@ -1378,7 +1378,7 @@ function renderSalmonCuts(q = '') {
       <td style="text-align:center;">${ck(c.scale)}</td>
       <td style="text-align:center;">${ck(c.pbo)}</td>
       <td style="text-align:center;">${ck(c.hg)}</td>
-      <td><button class="action-btn" onclick='openSalmonEdit(${JSON.stringify(c)})'>EDIT</button></td>
+      <td><button class="action-btn" onclick="openSalmonEdit(${c.id})">EDIT</button></td>
     </tr>`).join('') : '<tr><td colspan="7" class="empty-state">No customers on salmon cut list. Enable salmon for a customer from the Customers tab.</td></tr>';
 }
 
@@ -1398,7 +1398,9 @@ async function toggleBuysSalmon(id) {
   }
 }
 
-function openSalmonEdit(c) {
+function openSalmonEdit(id) {
+  const c = allCustomers.find(c => c.id === id);
+  if (!c) return;
   document.getElementById('se-customer-id').value = c.id;
   document.getElementById('salmon-edit-title').textContent = 'Edit Salmon Cut — ' + c.company_name;
   document.getElementById('se-cut').value = c.salmon_cut || '';
@@ -1407,7 +1409,7 @@ function openSalmonEdit(c) {
   document.getElementById('se-pbo').value = c.pbo ? 'true' : 'false';
   document.getElementById('se-hg').value = c.hg ? 'true' : 'false';
   document.getElementById('se-error').style.display = 'none';
-  document.getElementById('modal-salmon-edit').style.display = 'flex';
+  openModal('modal-salmon-edit');
 }
 
 async function saveSalmonCut() {

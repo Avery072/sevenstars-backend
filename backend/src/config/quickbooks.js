@@ -9,7 +9,7 @@ const oauthClient = new OAuthClient({
 });
 
 async function getStoredTokens() {
-  const result = await pool.query('SELECT * FROM qb_tokens ORDER BY id LIMIT 1');
+  const result = await pool.query('SELECT * FROM qb_tokens ORDER BY updated_at DESC, id DESC LIMIT 1');
   return result.rows[0] || null;
 }
 
